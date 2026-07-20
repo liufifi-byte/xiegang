@@ -18,18 +18,22 @@ app = FastAPI(
     description="Multi-agent decision parliament — 让 5 个 AI 议员为你的决策吵架",
 )
 
-# 允许前端跨域（生产部署时改成实际前端域名）
+# P0-S1.4: CORS 从 env 读取
+# .env 里 CORS_ORIGINS="http://localhost:3000,https://xiegang.vercel.app"
+# 缺省 fallback 到本地
+_cors_list = [
+    o.strip()
+    for o in settings.cors_origins.split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-    ],
+    allow_origins=_cors_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Device-Id"],  # P0-S1.1: 让前端能拿到回传 device_id
 )
 
 app.include_router(health_router, prefix="/api", tags=["health"])
