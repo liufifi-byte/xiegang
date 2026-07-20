@@ -29,23 +29,25 @@ async def create_parliament(req: CreateParliamentRequest, request: Request) -> d
     """创建议会，返回议会 ID 和 SSE 流 URL。
 
     P0-S1.1: 加了 IP + device_id 双轨限流。
+    P0-S2 fix: 开发环境（APP_ENV=development）跳过限流方便测试。
     """
     settings = get_settings()
     ip = _get_client_ip(request)
     device_id = _get_device_id(request)
 
-    # P0-S1.1: 限流检查
-    allowed, reason = await _check_and_record(
-        ip=ip,
-        device_id=device_id,
-        ip_per_minute=settings.rate_limit_ip_per_minute,
-        device_daily=settings.rate_limit_device_daily,
-    )
-    if not allowed:
-        return JSONResponse(
-            status_code=429,
-            content={"detail": reason, "retry_after_seconds": 60},
+    # P0-S1.1: 限流检查（开发环境跳过）
+    if settings.app_env != "development":
+        allowed, reason = await _check_and_record(
+            ip=ip,
+            device_id=device_id,
+            ip_per_minute=settings.rate_limit_ip_per_minute,
+            device_daily=settings.rate_limit_device_daily,
         )
+        if not allowed:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": reason, "retry_after_seconds": 60},
+            )
 
     supabase = get_supabase()
 
