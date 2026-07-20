@@ -89,58 +89,77 @@ def test_archive_writes_correct_field_names(monkeypatch):
     assert update_data["total_duration_seconds"] > 0
 
 
-# ============ Bug 5: _mark_parliament_failed 真写 DB ============
-
-def test_mark_parliament_failed_writes_failed_status(monkeypatch):
-    """P0-S1.0: 节点异常时 _mark_parliament_failed 真把 status 标 failed。"""
-    from app.api.stream import _mark_parliament_failed
-
-    captured = {}
-
-    class MockExec:
-        def execute(self_inner):
-            return None
-
-    class MockTable:
-        def update(self, data):
-            captured["data"] = data
-            return self
-        def eq(self, col, val):
-            captured[col] = val
-            return self
-
-    class MockSupabase:
-        def table(self, name):
-            return MockTable()
-
-    monkeypatch.setattr("app.api.stream.get_supabase", lambda: MockSupabase())
-
-    asyncio.run(_mark_parliament_failed("p-broken", "test error"))
-
-    assert captured.get("id") == "p-broken"
-    assert captured["data"]["status"] == "failed"
-    assert "finished_at" in captured["data"]
-    assert "test error" in captured["data"]["error_message"]
+# ============ Bug 5 已被 P0-S2 替代：worker 接管任务生命周期 ============
+# _mark_parliament_failed 在 stream.py 已被删除
+# 现在 worker.py 的 run_one_parliament 通过 archive 节点自然写 status='done'
+# 异常路径由 worker_loop 捕获 + 通过 append_event('error') 通知前端
 
 
-def test_mark_parliament_failed_handles_db_failure(monkeypatch):
-    """P0-S1.0: 即使 DB 本身炸了，_mark_parliament_failed 也不该再抛异常。"""
-    from app.api.stream import _mark_parliament_failed
+def test_worker_run_one_parliament_handles_exception(monkeypatch):
+    """worker.py 异常不会让 worker_loop 整体崩。"""
+    from app import worker
 
-    def raise_err():
-        raise RuntimeError("DB 宕机")
+    async def fake_get_graph(*a, **kw):
+        raise RuntimeError("GLM API 挂了")
 
-    class MockTable:
-        def update(self, *a, **kw):
-            raise_err()
-        def eq(self, *a, **kw):
-            return self
+    monkeypatch.setattr(worker, "get_graph_with_checkpointer", fake_get_graph)
+    # mark_running 用 in-memory 路径
+    import os
+    monkeypatch.setenv("SKIP_DB_CONTEXT", "true")
 
-    class MockSupabase:
-        def table(self, name):
-            return MockTable()
+    async def fake_append_event(*a, **kw):
+        return 1
 
-    monkeypatch.setattr("app.api.stream.get_supabase", lambda: MockSupabase())
+    monkeypatch.setattr(worker, "append_event", fake_append_event)
 
+    async def fake_get_or_create(parliament_id):
+        class C: pass
+        return C()
+
+    async def fake_noop(*a, **kw):
+        return None
+
+    monkeypatch.setattr(worker, "get_or_create_context", fake_get_or_create)
+    monkeypatch.setattr(worker, "mark_running", fake_noop)
+    monkeypatch.setattr(worker, "mark_finished", fake_noop)
+
+    task = {
+        "id": "p-test",
+        "topic": "测试",
+        "topic_category": "general",
+        "user_background": None,
+        "user_id": None,
+        "device_id": "d1",
+    }
     # 不应该抛异常
-    asyncio.run(_mark_parliament_failed("p-x", "test"))
+    import asyncio
+    asyncio.run(worker.run_one_parliament(task))
+
+
+def test_reclaim_stale_tasks_returns_int(monkeypatch):
+    """启动回收返回整数。"""
+    from app import worker
+
+    def fake_do():
+        return 0
+
+    async def fake_to_thread(fn, *a, **kw):
+        return fn()
+
+    # mock psycopg 让内部 _do() 不连真 DB
+    class FakeCursor:
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def execute(self, *a, **kw): pass
+        def fetchall(self): return []
+    class FakeConn:
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def cursor(self): return FakeCursor()
+        def commit(self): pass
+    import app.worker as w
+    monkeypatch.setattr(w.psycopg, "connect", lambda *a, **kw: FakeConn())
+
+    result = asyncio.run(worker._reclaim_stale_tasks())
+    assert isinstance(result, int)
+    assert result == 0  # fetchall 返回空

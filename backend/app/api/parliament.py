@@ -54,7 +54,8 @@ async def create_parliament(req: CreateParliamentRequest, request: Request) -> d
         "topic_category": req.topic_category,
         "user_background": req.user_background,
         "user_id": req.user_id,
-        "status": "pending",
+        "device_id": device_id,  # P0-S2: 所有权校验用
+        "status": "queued",     # P0-S2: Worker 抢任务用
         "members_state": {},
         "transcript": [],
         "tool_calls": [],
