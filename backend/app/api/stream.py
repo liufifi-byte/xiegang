@@ -1,5 +1,7 @@
 """SSE 流式端点：订阅议会进度。"""
+import asyncio
 import json
+import logging
 import time
 
 from fastapi import APIRouter, Request
@@ -15,11 +17,29 @@ from app.runtime_context import (
     mark_running,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/parliament", tags=["stream"])
 
 
 # SSE 心跳间隔，避免代理掐断长连接
 HEARTBEAT_SECONDS = 15
+
+
+async def _mark_parliament_failed(parliament_id: str, reason: str) -> None:
+    """P0-S1: 节点炸时把 parliaments.status 真标为 failed，不卡 running。"""
+    try:
+        supabase = get_supabase()
+        supabase.table("parliaments").update({
+            "status": "failed",
+            "finished_at": "now()",
+            "error_message": reason[:500],
+        }).eq("id", parliament_id).execute()
+    except Exception as db_err:
+        logger.error(
+            "无法把议会标记为 failed: parliament_id=%s db_err=%s",
+            parliament_id, db_err,
+        )
 
 
 async def _load_parliament_from_db(parliament_id: str) -> dict | None:
@@ -119,6 +139,7 @@ async def stream_parliament(parliament_id: str, request: Request):
             ):
                 # V1-S4 预留：取消请求检查
                 if await is_cancelled(parliament_id):
+                    await _mark_parliament_failed(parliament_id, "user_cancelled")
                     yield {
                         "event": "message",
                         "data": json.dumps(
@@ -163,7 +184,15 @@ async def stream_parliament(parliament_id: str, request: Request):
                 ),
             }
 
+        except asyncio.CancelledError:
+            # P0-S1: 客户端断开 / cancel 触发
+            logger.info("议会 %s 被 cancel 或客户端断开", parliament_id)
+            await _mark_parliament_failed(parliament_id, "cancelled_or_disconnected")
+            raise
         except Exception as e:
+            logger.exception("议会 %s 异常: %s", parliament_id, e)
+            # P0-S1: 异常时真把 parliaments.status 改成 failed
+            await _mark_parliament_failed(parliament_id, str(e))
             yield {
                 "event": "message",
                 "data": json.dumps(

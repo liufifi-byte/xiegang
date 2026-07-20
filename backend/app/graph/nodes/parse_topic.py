@@ -10,7 +10,9 @@ from app.llm import get_structured_llm
 
 VALID_CATEGORIES = {
     "real_estate", "gold", "offer", "job_change",
-    "investment", "entrepreneurship", "general",
+    "investment", "entrepreneurship",
+    "stocks", "buy_bag",  # P0-S1 补：前端已加但后端白名单漏了
+    "general",
 }
 
 

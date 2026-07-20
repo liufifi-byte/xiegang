@@ -21,16 +21,21 @@ def run_archive(state: dict) -> dict:
         return {"finished_at": time.time()}
 
     try:
-        # 1. 更新 parliaments 行
+        # 1. 更新 parliaments 行（V2-S3 P0-S1 修复：字段名 + 补全 finished_at/duration/status）
+        started_at = state.get("started_at")
+        duration = int(time.time() - started_at) if started_at else None
         update_data = {
             "status": "done",
-            "category": state.get("category"),
+            "topic_category": state.get("category"),  # 字段名修复：原 "category" 不存在
             "members_state": state.get("members", {}),
             "transcript": state.get("transcript", []),
             "tool_calls": state.get("tool_calls", []),
             "election_result": state.get("election_result"),
             "summary": state.get("summary"),
             "tension_score": state.get("tension_score", 0.0),
+            # P0-S1: 真正补全（原版只 update_state，从不写 DB）
+            "finished_at": "now()",
+            "total_duration_seconds": duration,
         }
         supabase.table("parliaments").update(update_data).eq(
             "id", parliament_id
