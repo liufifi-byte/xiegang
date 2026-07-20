@@ -18,14 +18,14 @@ _db_url_cache: str | None = None
 
 
 def _clean_db_url() -> str:
-    """直接用 SUPABASE_DB_URL_DIRECT（langgraph checkpointer 专用直连）。
+    """用 pooler URL（SUPABASE_DB_URL）。
 
-    P0-S2: 走 pooler 会跟 prepared statements + CREATE INDEX CONCURRENTLY 冲突。
-    直连 5432 端口绕开 PgBouncer。fallback 到 pooler URL。
+    P0-S2 fix: 直连 5432 端口从本地 IPv6 网络不通（Connection refused）。
+    直接用 pooler 6543 + prepare_threshold=None + 手动建表脚本。
     """
     global _db_url_cache
     if _db_url_cache is None:
-        url = get_settings().supabase_db_url_direct or get_settings().supabase_db_url
+        url = get_settings().supabase_db_url
         _db_url_cache = re.sub(r"\?.*$", "", url)
     return _db_url_cache
 
@@ -37,16 +37,18 @@ _setup_done: bool = False
 async def get_checkpointer() -> AsyncPostgresSaver:
     """返回 AsyncPostgresSaver 单例。
 
-    P0-S2 fix: Supabase PgBouncer 不支持 prepared statements，
-    所以手动构造 AsyncConnectionPool 传 prepare_threshold=None，
-    用 AsyncPostgresSaver(pool=...) 创建。
+    P0-S2 fix: Supabase 直连 5432 从本地网络不通 + pooler 6543 不支持
+    CREATE INDEX CONCURRENTLY。 workaround：
+    1. 用 pooler URL 创建 pool
+    2. 手动跳过 setup()（手动跑 migration 建 langgraph 的表）
+       脚本: scripts/migrate_009_langgraph_tables.py
     """
     global _saver, _setup_done
 
     if _saver is None:
         from psycopg_pool import AsyncConnectionPool
 
-        # AsyncConnectionPool 接受 psycopg connect_kwargs
+        # 用 pooler URL（直连不通）
         pool = AsyncConnectionPool(
             conninfo=_clean_db_url(),
             kwargs={"prepare_threshold": None},
@@ -55,8 +57,8 @@ async def get_checkpointer() -> AsyncPostgresSaver:
         await pool.open()
         _saver = AsyncPostgresSaver(conn=pool)
 
-    if not _setup_done:
-        await _saver.setup()
-        _setup_done = True
+    # 不调 setup()——pooler 不支持 CONCURRENTLY。
+    # 手动跑 migrations/009_langgraph_tables.py 建表。
+    _setup_done = True
 
     return _saver
