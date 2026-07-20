@@ -11,6 +11,7 @@ import time
 from fastapi import APIRouter, Request
 from sse_starlette.sse import EventSourceResponse
 
+from app.config import get_settings
 from app.db import get_supabase
 from app.event_store import fetch_events_since
 from app.middleware.rate_limit import _get_device_id
@@ -61,7 +62,11 @@ async def stream_parliament(parliament_id: str, request: Request):
             return
 
         stored_device = row.get("device_id")
-        if stored_device:
+        # P0-S2.3: 所有权校验（生产环境）
+        # 开发环境跳过——因为 EventSource API 不支持自定义 header，
+        # 加上 Next.js rewrite 不转发 X-Device-Id，导致开发时容易误拦
+        settings = get_settings()
+        if stored_device and settings.app_env != "development":
             request_device = _get_device_id(request)
             if request_device != stored_device:
                 yield {
