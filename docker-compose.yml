@@ -1,0 +1,16 @@
+version: '3.8'
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: council-postgres
+    environment:
+      POSTGRES_DB: council
+      POSTGRES_USER: council
+      POSTGRES_PASSWORD: council
+    ports:
+      - "5433:5432"
+    volumes:
+      - council_pg_data:/var/lib/postgresql/data
+
+volumes:
+  council_pg_data:
