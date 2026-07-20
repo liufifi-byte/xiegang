@@ -1,8 +1,15 @@
 """议会 HTTP API。"""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from app.config import get_settings
 from app.db import get_supabase
+from app.middleware.rate_limit import (
+    _check_and_record,
+    _get_client_ip,
+    _get_device_id,
+)
 from app.runtime_context import request_cancel, set_user_interrupt
 from app.schemas.parliament import (
     CreateParliamentRequest,
@@ -18,8 +25,28 @@ class InterruptRequest(BaseModel):
 
 
 @router.post("")
-async def create_parliament(req: CreateParliamentRequest) -> dict:
-    """创建议会，返回议会 ID 和 SSE 流 URL。"""
+async def create_parliament(req: CreateParliamentRequest, request: Request) -> dict:
+    """创建议会，返回议会 ID 和 SSE 流 URL。
+
+    P0-S1.1: 加了 IP + device_id 双轨限流。
+    """
+    settings = get_settings()
+    ip = _get_client_ip(request)
+    device_id = _get_device_id(request)
+
+    # P0-S1.1: 限流检查
+    allowed, reason = await _check_and_record(
+        ip=ip,
+        device_id=device_id,
+        ip_per_minute=settings.rate_limit_ip_per_minute,
+        device_daily=settings.rate_limit_device_daily,
+    )
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": reason, "retry_after_seconds": 60},
+        )
+
     supabase = get_supabase()
 
     row = {
@@ -41,6 +68,7 @@ async def create_parliament(req: CreateParliamentRequest) -> dict:
     return {
         "parliament_id": parliament_id,
         "stream_url": f"/api/parliament/{parliament_id}/stream",
+        "device_id": device_id,  # P0-S1.1: 回传让前端记
     }
 
 

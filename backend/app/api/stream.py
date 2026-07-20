@@ -206,6 +206,11 @@ async def stream_parliament(parliament_id: str, request: Request):
             }
         finally:
             await mark_finished(parliament_id)
+            # P0-S1.1: 释放该议会的并发占位 + device_id 槽
+            # 从 DB 查 device_id（POST 时由前端 X-Device-Id 传，但这里查不到；用 row 的 user_id 兜底）
+            from app.middleware.rate_limit import mark_device_finished
+            device_id = (row.get("user_id") or "_unknown_device") if row else "_unknown_device"
+            await mark_device_finished(device_id)
 
     return EventSourceResponse(event_generator())
 

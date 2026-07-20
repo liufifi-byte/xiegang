@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { HomeSceneTabs } from "@/components/HomeSceneTabs";
-import { createParliament } from "@/lib/api";
+import { createParliament, RateLimitError } from "@/lib/api";
 
 export default function HomePage() {
   const router = useRouter();
@@ -25,7 +25,11 @@ export default function HomePage() {
       );
       router.push(`/parliament/${result.parliament_id}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (e instanceof RateLimitError) {
+        setError(e.message);
+      } else {
+        setError(e instanceof Error ? e.message : String(e));
+      }
       setLoading(false);
     }
   };

@@ -1,8 +1,28 @@
+import { getDeviceId } from "./device";
+
 const API_BASE = "/api";
+
+/** P0-S1.1: 构造统一 headers 含 X-Device-Id */
+function buildHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const h: Record<string, string> = { ...extra };
+  const deviceId = getDeviceId();
+  if (deviceId) h["X-Device-Id"] = deviceId;
+  return h;
+}
 
 export interface CreateParliamentResponse {
   parliament_id: string;
   stream_url: string;
+  device_id?: string;
+}
+
+export class RateLimitError extends Error {
+  retryAfter: number;
+  constructor(message: string, retryAfter: number) {
+    super(message);
+    this.name = "RateLimitError";
+    this.retryAfter = retryAfter;
+  }
 }
 
 export async function createParliament(
@@ -13,7 +33,7 @@ export async function createParliament(
 ): Promise<CreateParliamentResponse> {
   const res = await fetch(`${API_BASE}/parliament`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: buildHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
       topic,
       topic_category: topicCategory || null,
@@ -21,6 +41,13 @@ export async function createParliament(
       user_id: userId || null,
     }),
   });
+  if (res.status === 429) {
+    const data = await res.json().catch(() => ({ detail: "请求过于频繁", retry_after_seconds: 60 }));
+    throw new RateLimitError(
+      data.detail || "请求过于频繁",
+      data.retry_after_seconds || 60
+    );
+  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`createParliament ${res.status}: ${text}`);
@@ -33,13 +60,12 @@ export async function interruptParliament(
   parliamentId: string,
   content: string
 ): Promise<{ ok: boolean; queued_at: boolean }> {
-  // 直连后端（与 SSE 同源）
   const base = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8001";
   const res = await fetch(
     `${base}/api/parliament/${parliamentId}/interrupt`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: buildHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ content }),
     }
   );
@@ -50,14 +76,14 @@ export async function interruptParliament(
   return res.json();
 }
 
-/** V1-S4: 取消议会（关口套到 stream.py 的 cancel 检查位）。 */
+/** V1-S4: 取消议会（V2-S2 硬中断路径）。 */
 export async function cancelParliament(
   parliamentId: string
 ): Promise<{ ok: boolean; message: string }> {
   const base = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8001";
   const res = await fetch(
     `${base}/api/parliament/${parliamentId}/cancel`,
-    { method: "POST" }
+    { method: "POST", headers: buildHeaders() }
   );
   if (!res.ok) {
     const text = await res.text();
@@ -65,7 +91,6 @@ export async function cancelParliament(
   }
   return res.json();
 }
-
 export async function getParliament(parliamentId: string) {
   const res = await fetch(`${API_BASE}/parliament/${parliamentId}`);
   if (!res.ok) throw new Error(`getParliament ${res.status}`);
