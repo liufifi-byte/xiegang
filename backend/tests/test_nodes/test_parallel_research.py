@@ -47,13 +47,14 @@ def test_parallel_research_returns_5_members(monkeypatch):
     from app.schemas.member import Evidence, MemberStatement
 
     async def mock_research(mid, topic, variables, parliament_id=None, memories="（暂无相关历史记忆）"):
-        return MemberStatement(
+        stmt = MemberStatement(
             member_id=mid,
             stance="neutral",
             confidence=0.5,
             evidence=[Evidence(claim="mock", source="test", strength="medium")],
             reasoning_summary=f"{mid} mock reply",
         )
+        return stmt, [{"tool": "web_search", "ok": True}]
 
     monkeypatch.setattr(pr_module, "_research_for_member_async", mock_research)
 
@@ -80,11 +81,12 @@ def test_parallel_research_handles_member_error(monkeypatch):
     async def mock_research(mid, topic, variables, parliament_id=None, memories="（暂无相关历史记忆）"):
         if mid == "suan":
             raise RuntimeError("simulated LLM error")
-        return MemberStatement(
+        stmt = MemberStatement(
             member_id=mid, stance="for", confidence=0.7,
             evidence=[Evidence(claim="x", source="y", strength="high")],
             reasoning_summary=f"{mid} ok",
         )
+        return stmt, [{"tool": "web_search", "ok": True}]
 
     monkeypatch.setattr(pr_module, "_research_for_member_async", mock_research)
 
@@ -107,10 +109,11 @@ def test_parallel_research_preserves_existing_transcript(monkeypatch):
     from app.schemas.member import MemberStatement
 
     async def mock_research(mid, topic, variables, parliament_id=None, memories="（暂无相关历史记忆）"):
-        return MemberStatement(
+        stmt = MemberStatement(
             member_id=mid, stance="neutral", confidence=0.5,
             evidence=[], reasoning_summary=f"{mid}",
         )
+        return stmt, []
 
     monkeypatch.setattr(pr_module, "_research_for_member_async", mock_research)
 

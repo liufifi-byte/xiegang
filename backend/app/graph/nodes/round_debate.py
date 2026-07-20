@@ -131,6 +131,8 @@ async def _debate_member_safe(
     parliament_id: str | None = None,
 ) -> dict:
     """包装，单议员失败不影响别人。"""
+    import logging
+    logger = logging.getLogger(__name__)
     try:
         stmt = await _debate_one_member_async(
             mid, name, role, topic, variables, next_round,
@@ -138,7 +140,10 @@ async def _debate_member_safe(
         )
         return {"ok": True, "data": stmt}
     except Exception as e:
-        return {"ok": False, "error": e, "speaker": mid, "round": next_round}
+        import traceback
+        tb = traceback.format_exc()
+        logger.warning("议员 %s 第 %d 轮辩论失败:\n%s", mid, next_round, tb)
+        return {"ok": False, "error": f"{type(e).__name__}: {e}", "speaker": mid, "round": next_round}
 
 
 async def run_debate_round(state: dict) -> dict:
@@ -207,13 +212,14 @@ async def run_debate_round(state: dict) -> dict:
             })
         else:
             err = outcome["error"]
+            err_str = f"{type(err).__name__}: {err}" if err else "Unknown error"
             speaker = outcome.get("speaker", "?")
             new_entries.append({
                 "speaker": speaker,
                 "round": next_round,
                 "type": "debate_error",
                 "stance": "neutral",
-                "content": f"[DEBATE ERROR] {err}",
+                "content": f"[DEBATE ERROR] {err_str}",
                 "evidence": [],
                 "confidence": 0.0,
             })

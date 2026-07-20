@@ -65,18 +65,38 @@ async def _research_for_member_async(
     """V2-S3: 接受预计算的 memories 文本，注入 prompt 第 5 层。"""
     tools = MEMBER_TOOLS[member_id]
     tool_results: list[str] = []
+    # P0-tools: 真实记录每个工具调用
+    tool_call_records: list[dict] = []
 
     query_str = f"{topic} {' '.join(variables[:3])}"
     for tool in tools[:MAX_TOOL_CALLS_PER_MEMBER]:
+        tool_name = getattr(tool, "__name__", str(tool))
+        import time as _t
+        call_start = _t.time()
         try:
             results = tool(query_str)
+            result_count = len(results) if isinstance(results, list) else 0
+            tool_call_records.append({
+                "tool": tool_name,
+                "query": query_str[:100],
+                "result_count": result_count,
+                "ok": True,
+                "duration_ms": int((_t.time() - call_start) * 1000),
+            })
             for r in results[:2]:
                 tool_results.append(
                     f"- [{r.get('title', '')}]({r.get('url', '')}) "
                     f"{r.get('content', '')[:200]}"
                 )
         except Exception as e:
-            tool_results.append(f"- [TOOL ERROR] {e}")
+            tool_call_records.append({
+                "tool": tool_name,
+                "query": query_str[:100],
+                "ok": False,
+                "error": f"{type(e).__name__}: {e}",
+                "duration_ms": int((_t.time() - call_start) * 1000),
+            })
+            tool_results.append(f"- [TOOL ERROR] {tool_name}: {e}")
 
     tool_context = "\n".join(tool_results) if tool_results else "（无工具结果）"
 
@@ -117,11 +137,14 @@ async def _research_for_member_async(
     async with sem:
         # V2-S2: cancel_guard 包装
         from app.cancel_guard import guard_ainvoke
-        return await guard_ainvoke(
+        stmt = await guard_ainvoke(
             parliament_id=parliament_id or "_no_parliament",
             coro=structured.ainvoke(prompt),
             timeout=60,  # P0-S1.2: 单 LLM 调用硬上限 60s
         )
+    # 把真实工具调用 record 夹带返回（不影响 MemberStatement 类型，
+    # 调用方负责处理）
+    return stmt, tool_call_records
 
 
 def _research_for_member(member_id: str, topic: str, variables: list[str]) -> MemberStatement:
@@ -171,6 +194,15 @@ async def parallel_research(state: dict) -> dict:
         if outcome["ok"]:
             stmt: MemberStatement = outcome["data"]
             results[mid] = stmt.model_dump()
+            # P0: 真实工具调用记录（每条是 web_search / data_table 等的真实调用）
+            for tc in outcome.get("tool_calls", []):
+                tool_calls_log.append({
+                    "member": mid,
+                    "action": "tool_call",
+                    **tc,
+                    "timestamp": time.time(),
+                })
+            # 调研完成标记
             tool_calls_log.append({
                 "member": mid,
                 "action": "research_complete",
@@ -189,17 +221,18 @@ async def parallel_research(state: dict) -> dict:
             })
         else:
             err = outcome["error"]
+            err_str = f"{type(err).__name__}: {err}" if err else "Unknown error"
             results[mid] = {
                 "member_id": mid,
                 "stance": "neutral",
                 "confidence": 0.0,
                 "evidence": [],
-                "reasoning_summary": f"[RESEARCH ERROR] {err}",
+                "reasoning_summary": f"[RESEARCH ERROR] {err_str}",
             }
             tool_calls_log.append({
                 "member": mid,
                 "action": "research_error",
-                "error": str(err),
+                "error": err_str if isinstance(err_str, str) else str(err),
                 "timestamp": time.time(),
             })
             initial_statements.append({
@@ -207,7 +240,7 @@ async def parallel_research(state: dict) -> dict:
                 "round": 0,
                 "type": "research",
                 "stance": "neutral",
-                "content": f"[RESEARCH ERROR] {err}",
+                "content": f"[RESEARCH ERROR] {err_str}",
                 "evidence": [],
                 "confidence": 0.0,
             })
@@ -227,9 +260,9 @@ async def _research_for_member_safe(
 ) -> dict:
     """包装 async 调研，捕获异常返回 dict（避免单点失败拖垮 gather）。"""
     try:
-        stmt = await _research_for_member_async(
+        stmt, tool_call_records = await _research_for_member_async(
             member_id, topic, variables, parliament_id, memories
         )
-        return {"ok": True, "data": stmt}
+        return {"ok": True, "data": stmt, "tool_calls": tool_call_records}
     except Exception as e:
-        return {"ok": False, "error": e}
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
