@@ -7,9 +7,11 @@ import time
 from fastapi import APIRouter, Request
 from sse_starlette.sse import EventSourceResponse
 
+from app.config import get_settings
 from app.db import get_supabase
 from app.graph.parliament import get_graph_with_checkpointer
 from app.graph.state import make_initial_state
+from app.monitoring import log_parliament_failed, log_parliament_started, log_parliament_succeeded
 from app.runtime_context import (
     get_or_create_context,
     is_cancelled,
@@ -97,6 +99,10 @@ async def stream_parliament(parliament_id: str, request: Request):
         # 3. 构造初始 state
         initial_state = _build_state_from_db_row(row, parliament_id)
 
+        # P0-S1.4: 监控起点
+        parliament_start_ts = time.time()
+        log_parliament_started(parliament_id, row.get("user_id"), row.get("topic", ""))
+
         # 4. 推送启动事件
         yield {
             "event": "message",
@@ -118,13 +124,16 @@ async def stream_parliament(parliament_id: str, request: Request):
             await mark_finished(parliament_id)
             return
 
+        # P0-S1.2: 整体议会超时 watchdog
+        settings = get_settings()
+        total_timeout = settings.parliament_total_timeout
+        timed_out = False
+
         # 5. 流式跑状态机（V2-S1: checkpointer + thread_id 续盘）
         last_heartbeat = time.time()
         try:
             graph = await get_graph_with_checkpointer()
             config = {"configurable": {"thread_id": parliament_id}}
-            # V2-S1: 如果该 thread 已有 checkpoint，传 None 让 LangGraph 自动续；
-            # 否则传 initial_state 跑全图
             from langgraph.types import StateSnapshot
             try:
                 snapshot: StateSnapshot = await graph.aget_state(config)
@@ -137,8 +146,21 @@ async def stream_parliament(parliament_id: str, request: Request):
                 run_input,
                 config=config,
             ):
-                # V1-S4 预留：取消请求检查
+                # P0-S1.2: 整体超时检查
+                elapsed = time.time() - parliament_start_ts
+                if elapsed > total_timeout:
+                    logger.warning(
+                        "议会 %s 超时（%ds > %ds），强制终止",
+                        parliament_id, int(elapsed), total_timeout,
+                    )
+                    timed_out = True
+                    from app.cancel_guard import cancel_all_inflight
+                    await cancel_all_inflight(parliament_id)
+                    break
+
+                # V1-S4 + P0-S1.3: 取消请求检查
                 if await is_cancelled(parliament_id):
+                    log_parliament_cancelled(parliament_id)
                     await _mark_parliament_failed(parliament_id, "user_cancelled")
                     yield {
                         "event": "message",
@@ -176,22 +198,48 @@ async def stream_parliament(parliament_id: str, request: Request):
                     yield {"event": "ping", "data": f" - {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now))}"}
 
             # 6. 跑完
-            yield {
-                "event": "message",
-                "data": json.dumps(
-                    {"type": "parliament_done", "parliament_id": parliament_id},
-                    ensure_ascii=False,
-                ),
-            }
+            if timed_out:
+                duration = time.time() - parliament_start_ts
+                log_parliament_failed(parliament_id, "total_timeout", duration)
+                await _mark_parliament_failed(parliament_id, f"议会总时长超过 {total_timeout}s，已强制终止")
+                yield {
+                    "event": "message",
+                    "data": json.dumps(
+                        {
+                            "type": "error",
+                            "parliament_id": parliament_id,
+                            "error": f"议会超时（{total_timeout}s），已强制终止",
+                        },
+                        ensure_ascii=False,
+                    ),
+                }
+            else:
+                duration = time.time() - parliament_start_ts
+                log_parliament_succeeded(parliament_id, duration)
+                yield {
+                    "event": "message",
+                    "data": json.dumps(
+                        {"type": "parliament_done", "parliament_id": parliament_id},
+                        ensure_ascii=False,
+                    ),
+                }
 
         except asyncio.CancelledError:
-            # P0-S1: 客户端断开 / cancel 触发
-            logger.info("议会 %s 被 cancel 或客户端断开", parliament_id)
+            duration = time.time() - parliament_start_ts
+            log_parliament_failed(parliament_id, "cancelled_or_disconnected", duration)
+            # P0-S1.2: 客户端断开 / cancel 触发，硬中断所有在飞 LLM
+            from app.cancel_guard import cancel_all_inflight
+            await cancel_all_inflight(parliament_id)
             await _mark_parliament_failed(parliament_id, "cancelled_or_disconnected")
             raise
         except Exception as e:
+            duration = time.time() - parliament_start_ts
+            log_parliament_failed(parliament_id, str(e), duration)
             logger.exception("议会 %s 异常: %s", parliament_id, e)
-            # P0-S1: 异常时真把 parliaments.status 改成 failed
+            # P0-S1.0: 异常时真把 parliaments.status 改成 failed
+            # P0-S1.2: 同时硬中断所有在飞 LLM 调用
+            from app.cancel_guard import cancel_all_inflight
+            await cancel_all_inflight(parliament_id)
             await _mark_parliament_failed(parliament_id, str(e))
             yield {
                 "event": "message",
