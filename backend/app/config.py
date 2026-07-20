@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     supabase_url: str
     supabase_key: str
     supabase_db_url: str
+    # P0-S2: langgraph checkpointer 用直连（绕 PgBouncer 不支持 prepared statements）
+    supabase_db_url_direct: str = ""
 
     # Tavily
     tavily_api_key: str

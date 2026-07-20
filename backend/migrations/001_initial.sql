@@ -41,7 +41,10 @@ CREATE TABLE IF NOT EXISTS parliaments (
 
   total_duration_seconds INT,
   created_at TIMESTAMPTZ DEFAULT now(),
+  started_at TIMESTAMPTZ,
   finished_at TIMESTAMPTZ,
+  device_id TEXT,
+  last_event_seq INT DEFAULT 0,
   error_message TEXT
 );
 

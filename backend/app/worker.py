@@ -51,13 +51,13 @@ async def fetch_next_queued_parliament() -> dict | None:
     """SELECT FOR UPDATE SKIP LOCKED 抢一个 queued 任务。
 
     多 worker 并发安全：Postgres 保证同一行不会被两个 worker 同时抢。
+    网络抖动时返回 None 让 loop 重试。
     """
     url = _clean_db_url()
 
     def _fetch():
         with psycopg.connect(url, connect_timeout=30) as conn:
             with conn.cursor() as cur:
-                # set short lock timeout, SKIP LOCKED 避免阻塞
                 cur.execute("SET LOCAL lock_timeout = '3s'")
                 cur.execute("""
                     SELECT id, topic, topic_category, user_background, user_id, device_id
@@ -73,7 +73,6 @@ async def fetch_next_queued_parliament() -> dict | None:
                     return None
                 cols = ["id", "topic", "topic_category", "user_background", "user_id", "device_id"]
                 task = dict(zip(cols, row))
-                # 标记为 running
                 cur.execute(
                     """UPDATE parliaments
                        SET status = 'running', started_at = now()
@@ -83,7 +82,11 @@ async def fetch_next_queued_parliament() -> dict | None:
                 conn.commit()
                 return task
 
-    return await asyncio.to_thread(_fetch)
+    try:
+        return await asyncio.to_thread(_fetch)
+    except Exception as e:
+        logger.warning("fetch_next_queued_parliament 失败（网络抖动?）: %s", e)
+        return None
 
 
 def _build_initial_state(task: dict) -> dict:
@@ -214,9 +217,12 @@ async def worker_loop() -> None:
     )
 
     # 启动时回收卡死任务
-    reclaimed = await _reclaim_stale_tasks()
-    if reclaimed > 0:
-        logger.info("启动回收 %d 个卡死任务", reclaimed)
+    try:
+        reclaimed = await _reclaim_stale_tasks()
+        if reclaimed > 0:
+            logger.info("启动回收 %d 个卡死任务", reclaimed)
+    except Exception as e:
+        logger.warning("启动回收失败（继续）: %s", e)
 
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
     running_tasks: set[asyncio.Task] = set()
@@ -224,28 +230,34 @@ async def worker_loop() -> None:
     logger.info("Worker 启动，并发上限 %d", _MAX_CONCURRENT)
 
     while True:
-        # 清理已完成的子 task
-        done = {t for t in running_tasks if t.done()}
-        running_tasks -= done
+        try:
+            # 清理已完成的子 task
+            done = {t for t in running_tasks if t.done()}
+            running_tasks -= done
 
-        # 并发未满才抢新任务
-        if len(running_tasks) >= _MAX_CONCURRENT:
-            await asyncio.sleep(1)
-            continue
+            # 并发未满才抢新任务
+            if len(running_tasks) >= _MAX_CONCURRENT:
+                await asyncio.sleep(1)
+                continue
 
-        task = await fetch_next_queued_parliament()
-        if task is None:
-            await asyncio.sleep(2)
-            continue
+            task = await fetch_next_queued_parliament()
+            if task is None:
+                await asyncio.sleep(2)
+                continue
 
-        logger.info("抢到任务 parliament_id=%s", task["id"])
+            logger.info("抢到任务 parliament_id=%s", task["id"])
 
-        async def _run_with_semaphore(t):
-            async with semaphore:
-                await run_one_parliament(t)
+            async def _run_with_semaphore(t):
+                async with semaphore:
+                    await run_one_parliament(t)
 
-        new_task = asyncio.ensure_future(_run_with_semaphore(task))
-        running_tasks.add(new_task)
+            new_task = asyncio.ensure_future(_run_with_semaphore(task))
+            running_tasks.add(new_task)
+
+        except Exception as e:
+            # P0-S2 fix: 任何 loop 迭代里的异常都不能让 worker 进程崩
+            logger.exception("worker_loop 迭代异常: %s", e)
+            await asyncio.sleep(5)  # 5s 退避，避免狂打 DB
 
 
 def main() -> None:
