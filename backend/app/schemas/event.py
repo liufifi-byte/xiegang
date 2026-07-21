@@ -9,11 +9,13 @@ EventType = Literal[
     "node_complete",
     "member_speaking",
     "tool_call",
+    "agent_trace",
     "round_end",
     "election_phase",
     "chair_elected",
     "summary_ready",
     "parliament_done",
+    "cancelled",
     "error",
 ]
 

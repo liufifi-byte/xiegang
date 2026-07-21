@@ -98,6 +98,7 @@ async def memory_query_async(
     topic_category: str,
     query_text: str,
     limit: int = 3,
+    user_id: str | None = None,
 ) -> str:
     """异步版本——调 async embedding（parallel_research 用）。"""
     from app.embedding import embed_query
@@ -123,6 +124,9 @@ async def memory_query_async(
             ).execute()
         result = await asyncio.to_thread(fetch)
         rows = result.data or []
+        # Agent 工具必须用户隔离。RPC 暂未接受 user_id 时，在结果进入模型前过滤。
+        if user_id:
+            rows = [row for row in rows if str(row.get("user_id") or "") == str(user_id)]
         return _format_memories_for_prompt(rows)
     except Exception as e:
         print(f"[memory_query_async] pgvector 检索失败: {e}")

@@ -42,6 +42,15 @@ class Settings(BaseSettings):
     # P0-S1.2 议会总超时（秒）
     parliament_total_timeout: int = 480  # 8 分钟
 
+    # Expert ReAct Agent 执行预算
+    agent_max_reason_steps: int = 3
+    agent_max_tool_calls: int = 2
+    agent_tool_timeout_seconds: int = 15
+    agent_total_timeout_seconds: int = 60
+    agent_research_node_timeout_seconds: int = 75
+    agent_max_observation_chars: int = 4000
+    agent_max_evidence: int = 3
+
 
 @lru_cache
 def get_settings() -> Settings:
