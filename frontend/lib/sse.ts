@@ -1,16 +1,32 @@
-import type { ParliamentSummary, TranscriptEntry } from "./types";
+import type { AgentTraceEvent, ParliamentSummary, TranscriptEntry } from "./types";
 
 export interface ParliamentStreamEvent {
   type:
     | "parliament_started"
     | "node_complete"
+    | "agent_trace"
     | "parliament_done"
     | "cancelled"
     | "error";
   parliament_id?: string;
+  seq?: number;
   topic?: string;
   node?: string;
   error?: string;
+  trace_id?: AgentTraceEvent["trace_id"];
+  run_id?: AgentTraceEvent["run_id"];
+  agent_id?: AgentTraceEvent["agent_id"];
+  step?: AgentTraceEvent["step"];
+  phase?: AgentTraceEvent["phase"];
+  public_message?: AgentTraceEvent["public_message"];
+  public_intent?: AgentTraceEvent["public_intent"];
+  tool_name?: AgentTraceEvent["tool_name"];
+  display_query?: AgentTraceEvent["display_query"];
+  source_previews?: AgentTraceEvent["source_previews"];
+  evidence_count?: AgentTraceEvent["evidence_count"];
+  duration_ms?: AgentTraceEvent["duration_ms"];
+  cache_hit?: AgentTraceEvent["cache_hit"];
+  timestamp?: AgentTraceEvent["timestamp"];
   payload?: {
     // state_update 子集（前端实际用到的）
     category?: string;
@@ -74,4 +90,3 @@ export function subscribeParliament(
 
   return () => eventSource.close();
 }
-

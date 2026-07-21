@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AgentTraceEvent,
   ElectionResult,
   MemberId,
   ParliamentSummary,
@@ -9,6 +10,7 @@ import {
   getMember,
 } from "@/lib/types";
 import { ElectionDetail } from "./ElectionDetail";
+import { AgentResearchTimeline } from "./AgentResearchTimeline";
 
 interface Props {
   summary: ParliamentSummary;
@@ -16,6 +18,8 @@ interface Props {
   durationSeconds?: number;
   /** 用户在议会里说过的话（V1-S1 临时从 sessionStorage 拿，S3 改为后端 archive） */
   userMessages?: TranscriptEntry[];
+  agentTraces?: AgentTraceEvent[];
+  selectedExpertIds?: MemberId[];
 }
 
 /**
@@ -26,6 +30,8 @@ export function SummaryPanel({
   topic,
   durationSeconds,
   userMessages = [],
+  agentTraces = [],
+  selectedExpertIds = [],
 }: Props) {
   const chair = summary.chair ? getMember(summary.chair) : undefined;
 
@@ -70,6 +76,72 @@ export function SummaryPanel({
           <MemberStanceBar stances={summary.member_stances} />
         )}
       </header>
+
+      {selectedExpertIds.length > 0 && (
+        <div className="mb-12 -mx-4">
+          <AgentResearchTimeline
+            traces={agentTraces}
+            expertIds={selectedExpertIds}
+          />
+        </div>
+      )}
+
+      {summary.agent_results && (
+        <MagazineSection
+          label="Research Evidence"
+          title="专家调研与证据"
+          emptyHint="本次会议没有外部调研记录"
+        >
+          <div className="space-y-5">
+            {Object.entries(summary.agent_results).map(([expertId, archive]) => {
+              const expert = getMember(expertId);
+              const result = archive.result;
+              return (
+                <div key={expertId} className="border-l-2 pl-4" style={{ borderColor: expert?.color }}>
+                  <div className="flex flex-wrap items-baseline gap-2">
+                    <span className="font-medium" style={{ color: expert?.color }}>
+                      {expert?.display_name || expertId}
+                    </span>
+                    <span className="text-xs text-ink-3">
+                      {archive.metrics?.tool_calls || 0} 次工具行动
+                      {archive.metrics?.duration_ms !== undefined &&
+                        ` · ${(archive.metrics.duration_ms / 1000).toFixed(1)}s`}
+                    </span>
+                    {result.degraded && (
+                      <span className="rounded bg-stance-neutralBg px-1.5 py-0.5 text-[10px] text-stance-neutralText">
+                        信息有限
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1.5 text-sm leading-relaxed text-ink">{result.thesis}</p>
+                  {archive.evidence && archive.evidence.length > 0 && (
+                    <ul className="mt-2 space-y-1.5">
+                      {archive.evidence.map((evidence) => (
+                        <li key={evidence.evidence_id} className="text-xs leading-relaxed text-ink-2">
+                          <span className="mr-1 text-ink-4">[{evidence.strength}]</span>
+                          {evidence.claim_summary}
+                          {evidence.source_url ? (
+                            <a
+                              href={evidence.source_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="ml-1 text-brand hover:underline"
+                            >
+                              — {evidence.source_domain || evidence.source_title}
+                            </a>
+                          ) : (
+                            <span className="ml-1 text-ink-4">— {evidence.source_title}</span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </MagazineSection>
+      )}
 
       {/* V1-S1.2 议长选举详情（嵌入到顶部议会信息之下） */}
       {summary.election && (

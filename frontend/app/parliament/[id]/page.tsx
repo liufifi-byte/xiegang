@@ -7,34 +7,16 @@ import { ChatMessage } from "@/components/ChatMessage";
 import { UserBubble } from "@/components/UserBubble";
 import { SystemMessage } from "@/components/SystemMessage";
 import { ChatInput } from "@/components/ChatInput";
+import { AgentResearchTimeline } from "@/components/AgentResearchTimeline";
 import { subscribeParliament } from "@/lib/sse";
 import {
+  AgentTraceEvent,
   MemberId,
   MemberStatus,
   ParliamentSummary,
   TranscriptEntry,
   getMember,
 } from "@/lib/types";
-import {
-  MEMBER_ENTRY_ORDER,
-  MEMBER_OPENING_LINES,
-  MEMBER_RESEARCH_DONE_PREFIX,
-} from "@/lib/opening_lines";
-
-const INITIAL_STATUS: Record<MemberId, MemberStatus> = {
-  suan: "idle",
-  chen: "idle",
-  ji:   "idle",
-  nian: "idle",
-  fan:  "idle",
-};
-
-// 开场白间隔（毫秒）
-const OPENING_INTERVAL_MS = 1200;
-
-// V1-S1.3：每位议员开场白最长保留时间（90s）。
-// 超时仍未替换为真实 research → 标记调研失败，移除开场白，status 设 error。
-const OPENING_TIMEOUT_MS = 90_000;
 
 export default function ParliamentPage() {
   const params = useParams();
@@ -44,7 +26,11 @@ export default function ParliamentPage() {
   const [topic, setTopic] = useState("");
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [toolCalls, setToolCalls] = useState<any[]>([]);
-  const [memberStatus, setMemberStatus] = useState(INITIAL_STATUS);
+  const [selectedExpertIds, setSelectedExpertIds] = useState<MemberId[]>([]);
+  const [agentTraces, setAgentTraces] = useState<AgentTraceEvent[]>([]);
+  const [memberStatus, setMemberStatus] = useState<
+    Partial<Record<MemberId, MemberStatus>>
+  >({});
   const [currentRound, setCurrentRound] = useState(0);
   const [status, setStatus] = useState<
     "connecting" | "running" | "done" | "error"
@@ -59,118 +45,21 @@ export default function ParliamentPage() {
   // 用户的插话（MVP: 本地追加，不写后端）
   const [userMessages, setUserMessages] = useState<TranscriptEntry[]>([]);
 
-  // "开场白"虚拟消息（每个议员一条"开始调研"）
-  // 后端真实研究结果推回来时把这个 entry 替换为真实结论。
-  const [openingEntries, setOpeningEntries] = useState<
-    Partial<Record<MemberId, TranscriptEntry>>
-  >({});
-
-  // 是否已经触发过开场编排（防止 StrictMode 重跑两次）
-  const openingStartedRef = useRef(false);
-
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
 
   // 合并 transcript：
   //   开场白（"开始调研"）—— 在议员**还没拿到研究结果**时显示
   //   服务端 research entry —— 拿到时展示完整结论，替换开场白
   //   debate / election / 用户消息 —— 按时间顺序追加
-  const mergedTranscript = useMemo(() => {
-    const all: TranscriptEntry[] = [];
-
-    // 1) 找出后端 transcript 里每位议员的 research 结果
-    const serverResearchByMember = new Map<MemberId, TranscriptEntry>();
-    for (const e of transcript) {
-      if (e.type === "research" && e.speaker !== "system" && e.speaker !== "user") {
-        serverResearchByMember.set(e.speaker as MemberId, e);
-      }
-    }
-
-    // 2) 议员按出场顺序：有研究结果就用研究结果，没有就放开场白
-    for (const mid of MEMBER_ENTRY_ORDER) {
-      const real = serverResearchByMember.get(mid);
-      const opening = openingEntries[mid];
-      if (!real && opening) {
-        all.push(opening);
-      } else if (real) {
-        all.push(real);
-      }
-    }
-
-    // 3) 后端其他类型条目（debate / election 等）按顺序追加
-    //    跳过已在上面处理过的 research（避免重复）
-    for (const e of transcript) {
-      if (e.type === "research") continue;
-      all.push(e);
-    }
-
-    // 4) 用户插话
-    all.push(...userMessages);
-
-    return all;
-  }, [openingEntries, transcript, userMessages]);
+  const mergedTranscript = useMemo(
+    () => [...transcript, ...userMessages],
+    [transcript, userMessages]
+  );
 
   // 自动滚到底
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [mergedTranscript.length]);
-
-  // === 开场编排：进入页面立刻让 5 议员依次发"开始调研" ===
-  useEffect(() => {
-    if (openingStartedRef.current || !parliamentId) return;
-    openingStartedRef.current = true;
-
-    let i = 0;
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    const tick = () => {
-      if (i >= MEMBER_ENTRY_ORDER.length) return;
-      const mid = MEMBER_ENTRY_ORDER[i];
-      const member = getMember(mid);
-      if (!member) {
-        i++;
-        timers.push(setTimeout(tick, OPENING_INTERVAL_MS));
-        return;
-      }
-      // 注入开场白
-      setOpeningEntries((prev) => ({
-        ...prev,
-        [mid]: {
-          speaker: mid,
-          type: "research",
-          round: 0,
-          content: MEMBER_OPENING_LINES[mid],
-          timestamp: "刚刚",
-        },
-      }));
-      // 状态 → 调研中
-      setMemberStatus((prev) => ({
-        ...prev,
-        [mid]: "thinking",
-      }));
-
-      // V1-S1.3：90s 后若该议员仍是 thinking + 开场白还在 → 调研失败
-      timers.push(
-        setTimeout(() => {
-          // 读取实时状态判断（用 functionalsetState 是不行的，需要借助外部）
-          // 简化：直接清开场白 + 标记 error。mergeTranscript 会自然不显示。
-          setOpeningEntries((prev) => {
-            if (!prev[mid]) return prev; // 已经被后端替换了
-            return { ...prev, [mid]: undefined };
-          });
-          setMemberStatus((prev) => {
-            if (prev[mid] === "done" || prev[mid] === "error") return prev;
-            return { ...prev, [mid]: "error" };
-          });
-        }, OPENING_TIMEOUT_MS)
-      );
-
-      i++;
-      if (i < MEMBER_ENTRY_ORDER.length) {
-        timers.push(setTimeout(tick, OPENING_INTERVAL_MS));
-      }
-    };
-    timers.push(setTimeout(tick, 600)); // 等 0.6s 系统消息出来再开始
-    return () => timers.forEach(clearTimeout);
-  }, [parliamentId]);
 
   // === SSE 订阅 ===
   useEffect(() => {
@@ -181,13 +70,73 @@ export default function ParliamentPage() {
       (event) => {
         if (event.type === "parliament_started") {
           setStatus("running");
-          if (event.payload?.topic) setTopic(event.payload.topic);
+          if (event.topic) setTopic(event.topic);
+          return;
+        }
+
+        if (
+          event.type === "agent_trace" &&
+          event.trace_id &&
+          event.run_id &&
+          event.agent_id &&
+          event.phase &&
+          event.public_message &&
+          event.timestamp !== undefined
+        ) {
+          const trace: AgentTraceEvent = {
+            seq: event.seq,
+            trace_id: event.trace_id,
+            run_id: event.run_id,
+            agent_id: event.agent_id,
+            step: event.step || 0,
+            phase: event.phase,
+            public_message: event.public_message,
+            public_intent: event.public_intent,
+            tool_name: event.tool_name,
+            display_query: event.display_query,
+            source_previews: event.source_previews || [],
+            evidence_count: event.evidence_count,
+            duration_ms: event.duration_ms,
+            cache_hit: event.cache_hit,
+            timestamp: event.timestamp,
+          };
+          setAgentTraces((prev) => {
+            if (trace.seq !== undefined && prev.some((item) => item.seq === trace.seq)) {
+              return prev;
+            }
+            return [...prev, trace];
+          });
+          const statusByPhase: Partial<Record<AgentTraceEvent["phase"], MemberStatus>> = {
+            started: "thinking",
+            deciding: "thinking",
+            tool_started: "using_tool",
+            tool_completed: "organizing",
+            evidence_added: "organizing",
+            finalizing: "organizing",
+            completed: "done",
+            degraded: "degraded",
+            failed: "error",
+          };
+          setMemberStatus((prev) => ({
+            ...prev,
+            [trace.agent_id]: statusByPhase[trace.phase] || "thinking",
+          }));
           return;
         }
 
         if (event.type === "node_complete") {
           const payload = event.payload || {};
           const node = event.node;
+
+          if (node === "select_experts" && Array.isArray(payload.selected_expert_ids)) {
+            const ids = payload.selected_expert_ids as MemberId[];
+            setSelectedExpertIds(ids);
+            setMemberStatus(
+              Object.fromEntries(ids.map((id) => [id, "idle"])) as Partial<
+                Record<MemberId, MemberStatus>
+              >
+            );
+          }
 
           // parse_topic / research 阶段：议员陆续 thinking
           if (node === "parse_topic" || node === "research") {
@@ -212,10 +161,6 @@ export default function ParliamentPage() {
               });
               return next;
             });
-            // 替换开场白：research 阶段 each member 完成后会被算到 transcript 里
-            // 我们让 mergedTranscript 直接显示后端的研究结果，旧开场白再放到下面找不到
-            // 简化：把开场白"清掉"（设为空），让真实 research 出现
-            // 但 mergedTranscript 上面有跳过 logic，应该可以工作
           }
 
           if (payload.transcript) {
@@ -232,10 +177,11 @@ export default function ParliamentPage() {
 
             // 阶段切换：从调研(R0)进入 R1 → 系统消息
             if (node === "debate" && payload.current_round > prevRound) {
-              setMemberStatus({
-                suan: "thinking", chen: "thinking",
-                ji: "thinking", nian: "thinking", fan: "thinking",
-              });
+              setMemberStatus((prev) =>
+                Object.fromEntries(
+                  Object.keys(prev).map((id) => [id, "speaking"])
+                ) as Partial<Record<MemberId, MemberStatus>>
+              );
             }
           }
 
@@ -310,16 +256,20 @@ export default function ParliamentPage() {
   const activeMemberData = activeMember
     ? {
         member: getMember(activeMember),
-        status: memberStatus[activeMember],
+        status: memberStatus[activeMember] || "idle",
         latestEntry: [...transcript]
           .reverse()
           .find((e) => e.speaker === activeMember),
         toolCalls: toolCalls.filter((c) => c.member === activeMember),
+        traces: agentTraces.filter((trace) => trace.agent_id === activeMember),
       }
     : null;
 
   const doneCount = useMemo(
-    () => Object.values(memberStatus).filter((s) => s === "done").length,
+    () =>
+      Object.values(memberStatus).filter(
+        (s) => s === "done" || s === "degraded"
+      ).length,
     [memberStatus]
   );
 
@@ -383,6 +333,7 @@ export default function ParliamentPage() {
 
       {/* 议员状态条 */}
       <MemberStatusBar
+        expertIds={selectedExpertIds}
         memberStatus={memberStatus}
         currentRound={currentRound}
         maxRound={3}
@@ -401,11 +352,17 @@ export default function ParliamentPage() {
             text={`你已加入「${topic || "议会"}」会议室`}
           />
 
+          <AgentResearchTimeline
+            traces={agentTraces}
+            expertIds={selectedExpertIds}
+            activeMember={activeMember}
+          />
+
           {/* connecting */}
           {status === "connecting" && (
             <div className="text-center py-8 text-ink-3">
               <div className="inline-block w-5 h-5 border-2 border-edge border-t-brand rounded-full animate-spin mb-2" />
-              <div className="text-xs">正在召唤议员...</div>
+              <div className="text-xs">正在组建本场专家议会...</div>
             </div>
           )}
 
@@ -458,6 +415,7 @@ export default function ParliamentPage() {
           status={activeMemberData.status}
           entry={activeMemberData.latestEntry}
           toolCalls={activeMemberData.toolCalls}
+          traces={activeMemberData.traces}
           onClose={() => setActiveMember(null)}
         />
       )}
@@ -484,6 +442,7 @@ function MemberDetailDrawer({
   status,
   entry,
   toolCalls,
+  traces,
   onClose,
 }: {
   name: string;
@@ -495,6 +454,7 @@ function MemberDetailDrawer({
   status: MemberStatus;
   entry?: TranscriptEntry;
   toolCalls: any[];
+  traces: AgentTraceEvent[];
   onClose: () => void;
 }) {
   return (
@@ -520,16 +480,19 @@ function MemberDetailDrawer({
               <div className="font-medium">
                 {name}
                 <span className="ml-2 text-xs text-white/60">
-                  {role}派
+                  {role}
                 </span>
               </div>
               <div className="text-xs text-white/70">
                 {
                   {
                     idle: "待命中",
-                    thinking: "正在调研...",
+                    thinking: "正在判断信息缺口...",
+                    using_tool: "正在自主查证...",
+                    organizing: "正在整理证据...",
                     speaking: "正在发言...",
                     done: "已完成本轮",
+                    degraded: "基于有限信息完成",
                     error: "出错",
                   }[status]
                 }
@@ -605,49 +568,43 @@ function MemberDetailDrawer({
           {/* V1-S4: 工具调用轨迹（真实渲染） */}
           <div>
             <div className="text-xs uppercase tracking-wider text-ink-3 mb-2 flex items-baseline justify-between">
-              <span>工具调用</span>
+              <span>自主调研路径</span>
               <span className="text-ink-4 normal-case tracking-normal text-[10px]">
-                {toolCalls.length} 次
+                {traces.length} 个阶段
               </span>
             </div>
-            {toolCalls.length === 0 ? (
-              <div className="text-ink-4 italic text-xs">暂无工具调用</div>
+            {traces.length === 0 ? (
+              <div className="text-ink-4 italic text-xs">暂无调研轨迹</div>
             ) : (
               <ul className="space-y-1.5">
-                {toolCalls.slice(-10).reverse().map((c, i) => (
+                {traces.slice(-12).map((trace, i) => (
                   <li
                     key={i}
                     className="text-xs bg-bg-elev rounded-md p-2.5"
                   >
                     <div className="flex items-baseline justify-between mb-0.5">
                       <span className="font-medium text-ink">
-                        {c.action || c.tool || "tool"}
+                        {trace.public_message}
                       </span>
-                      {c.round !== undefined && (
+                      {trace.duration_ms !== null && trace.duration_ms !== undefined && (
                         <span className="text-ink-4 text-[10px]">
-                          R{c.round}
+                          {(trace.duration_ms / 1000).toFixed(1)}s
                         </span>
                       )}
                     </div>
-                    {c.error ? (
-                      <div className="text-stance-againstText">
-                        错误：{c.error}
+                    {trace.display_query && (
+                      <div className="mt-1 break-words text-ink-3">
+                        搜索：{trace.display_query}
                       </div>
-                    ) : (
-                      c.stance && (
-                        <div className="text-ink-2">
-                          立场 <span className="font-medium">{c.stance}</span>
-                          {c.confidence !== undefined && (
-                            <span className="text-ink-3 ml-1">
-                              置信 {(c.confidence * 100).toFixed(0)}%
-                            </span>
-                          )}
-                        </div>
-                      )
                     )}
                   </li>
                 ))}
               </ul>
+            )}
+            {toolCalls.length > 0 && (
+              <div className="mt-2 text-[10px] text-ink-4">
+                已执行 {toolCalls.filter((item) => item.action === "tool_call").length} 次工具行动
+              </div>
             )}
           </div>
         </div>

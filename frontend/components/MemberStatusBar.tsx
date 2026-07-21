@@ -1,9 +1,10 @@
 "use client";
 
-import { MEMBERS, MemberId, MemberStatus } from "@/lib/types";
+import { getMember, MemberId, MemberStatus } from "@/lib/types";
 
 interface Props {
-  memberStatus: Record<MemberId, MemberStatus>;
+  expertIds: MemberId[];
+  memberStatus: Partial<Record<MemberId, MemberStatus>>;
   currentRound: number;
   maxRound: number;
   /** 已完成的议员数（用于显示进度） */
@@ -17,6 +18,7 @@ interface Props {
  * 卡片白底 + 议员彩色头像 + 状态指示。
  */
 export function MemberStatusBar({
+  expertIds,
   memberStatus,
   currentRound,
   maxRound,
@@ -34,7 +36,7 @@ export function MemberStatusBar({
           </span>
           <span className="text-xs text-ink-2">
             {currentRound === 0
-              ? `${doneCount}/5 在调研`
+              ? `${doneCount}/${expertIds.length || 5} 已完成调研`
               : currentRound >= maxRound
               ? `辩论完成`
               : `第 ${currentRound} / ${maxRound} 轮`}
@@ -43,8 +45,10 @@ export function MemberStatusBar({
 
         {/* 5 议员卡片 */}
         <div className="grid grid-cols-5 gap-1.5">
-            {MEMBERS.map((m) => {
-              const status = memberStatus[m.id];
+            {expertIds.map((expertId) => {
+              const m = getMember(expertId);
+              if (!m) return null;
+              const status = memberStatus[m.id] || "idle";
               const isActive = activeMember === m.id;
               // V1-S4: tooltip 显示议员思维模型 + 标志句式
               const tooltip = `${m.role}派 · ${m.model}\n招牌问句：${m.signature_line}`;
@@ -63,7 +67,10 @@ export function MemberStatusBar({
                 <div className="relative">
                   <div
                     className={`w-9 h-9 rounded flex items-center justify-center text-white text-sm font-medium ${
-                      status === "thinking" || status === "speaking"
+                      status === "thinking" ||
+                      status === "using_tool" ||
+                      status === "organizing" ||
+                      status === "speaking"
                         ? "animate-pulse-ring"
                         : ""
                     } ${status === "idle" ? "opacity-50" : ""}`}
@@ -105,9 +112,12 @@ export function MemberStatusBar({
 function StatusText({ status }: { status: MemberStatus }) {
   const map: Record<MemberStatus, { label: string; cls: string }> = {
     idle:     { label: "待命",   cls: "text-ink-3" },
-    thinking: { label: "调研中", cls: "text-gold-muted" },
+    thinking: { label: "判断中", cls: "text-gold-muted" },
+    using_tool: { label: "查证中", cls: "text-brand" },
+    organizing: { label: "整理中", cls: "text-gold-muted" },
     speaking: { label: "发言中", cls: "text-brand" },
     done:     { label: "已发言", cls: "text-ink-3" },
+    degraded: { label: "信息有限", cls: "text-stance-neutralText" },
     error:    { label: "出错",   cls: "text-red-700" },
   };
   const { label, cls } = map[status];

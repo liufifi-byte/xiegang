@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { SummaryPanel } from "@/components/SummaryPanel";
-import { ParliamentSummary, TranscriptEntry } from "@/lib/types";
+import { AgentTraceEvent, MemberId, ParliamentSummary, TranscriptEntry } from "@/lib/types";
 
 /**
  * 独立 summary 路由页面：从数据库拉议会结果并渲染纪要。
@@ -26,6 +26,8 @@ export default function SummaryPage() {
   const [topic, setTopic] = useState("");
   const [duration, setDuration] = useState<number | undefined>(undefined);
   const [userMessages, setUserMessages] = useState<TranscriptEntry[]>([]);
+  const [agentTraces, setAgentTraces] = useState<AgentTraceEvent[]>([]);
+  const [selectedExpertIds, setSelectedExpertIds] = useState<MemberId[]>([]);
 
   useEffect(() => {
     if (!parliamentId) return;
@@ -57,6 +59,10 @@ export default function SummaryPage() {
       }
 
       setSummary(data.summary as ParliamentSummary);
+      setAgentTraces((data.agent_traces || []) as AgentTraceEvent[]);
+      setSelectedExpertIds(
+        (data.selected_expert_ids || data.summary.selected_expert_ids || []) as MemberId[]
+      );
       setTopic(data.topic);
       if (data.finished_at && data.created_at) {
         const ms =
@@ -117,6 +123,8 @@ export default function SummaryPage() {
       topic={topic}
       durationSeconds={duration}
       userMessages={userMessages}
+      agentTraces={agentTraces}
+      selectedExpertIds={selectedExpertIds}
     />
   );
 }

@@ -1,4 +1,12 @@
-export type MemberId = "suan" | "chen" | "ji" | "nian" | "fan";
+export type ExpertId =
+  | "mathematician"
+  | "economist"
+  | "psychologist"
+  | "historian"
+  | "artist"
+  | "politician";
+export type LegacyMemberId = "suan" | "chen" | "ji" | "nian" | "fan";
+export type MemberId = ExpertId | LegacyMemberId;
 export type Stance = "for" | "against" | "neutral";
 
 export interface Member {
@@ -14,8 +22,42 @@ export interface Member {
   signature_line: string;
 }
 
-/** 5 议员静态信息（与 backend member_profiles 表保持一致）。 */
+/** 六位职业专家；每场由后端选择五位。 */
 export const MEMBERS: Member[] = [
+  {
+    id: "mathematician", display_name: "数学家", color: "#6F4878", role: "决策科学", avatar_char: "数",
+    model: "决策理论 · 概率 · 敏感性分析",
+    signature_line: "改变哪个变量，会让答案反过来？",
+  },
+  {
+    id: "economist", display_name: "经济学家", color: "#9B4D68", role: "经济分析", avatar_char: "经",
+    model: "机会成本 · 激励机制 · 边际收益",
+    signature_line: "你真正放弃的那个选项，值多少钱？",
+  },
+  {
+    id: "psychologist", display_name: "心理学家", color: "#A45B52", role: "心理分析", avatar_char: "心",
+    model: "价值澄清 · 认知偏差 · 身份认同",
+    signature_line: "这是你真正想要的，还是你害怕失去的？",
+  },
+  {
+    id: "historian", display_name: "历史学家", color: "#7B6652", role: "历史分析", avatar_char: "史",
+    model: "历史类比 · 基准概率 · 路径依赖",
+    signature_line: "过去真的发生过同一件事吗？",
+  },
+  {
+    id: "artist", display_name: "艺术家", color: "#86527D", role: "创意重构", avatar_char: "艺",
+    model: "问题重构 · 第三选项 · 意义建构",
+    signature_line: "如果不接受这个二选一，第三条路是什么？",
+  },
+  {
+    id: "politician", display_name: "政治家", color: "#745B70", role: "博弈分析", avatar_char: "政",
+    model: "利益相关者 · 权力关系 · 谈判",
+    signature_line: "谁真正握有筹码，你还能谈什么？",
+  },
+];
+
+/** 仅用于兼容已经归档的旧议会。 */
+export const LEGACY_MEMBERS: Member[] = [
   {
     id: "suan", display_name: "老算", color: "#2B4F8C", role: "理性", avatar_char: "算",
     model: "第一性原理 · 期望值 · 折现率",
@@ -44,13 +86,49 @@ export const MEMBERS: Member[] = [
 ];
 
 export function getMember(id: string): Member | undefined {
-  return MEMBERS.find((m) => m.id === id);
+  return [...MEMBERS, ...LEGACY_MEMBERS].find((m) => m.id === id);
 }
 
 export interface Evidence {
   claim: string;
   source: string;
   strength: "high" | "medium" | "low";
+  evidence_id?: string;
+}
+
+export type AgentTracePhase =
+  | "started"
+  | "deciding"
+  | "tool_started"
+  | "tool_completed"
+  | "evidence_added"
+  | "finalizing"
+  | "completed"
+  | "degraded"
+  | "failed";
+
+export interface AgentSourcePreview {
+  title: string;
+  domain?: string;
+  url?: string | null;
+}
+
+export interface AgentTraceEvent {
+  seq?: number;
+  trace_id: string;
+  run_id: string;
+  agent_id: MemberId;
+  step: number;
+  phase: AgentTracePhase;
+  public_message: string;
+  public_intent?: string | null;
+  tool_name?: string | null;
+  display_query?: string | null;
+  source_previews?: AgentSourcePreview[];
+  evidence_count?: number | null;
+  duration_ms?: number | null;
+  cache_hit?: boolean | null;
+  timestamp: number;
 }
 
 export interface TranscriptEntry {
@@ -99,9 +177,51 @@ export interface ParliamentSummary {
   election?: ElectionResult;
   /** V1-S1.2 新增：议员立场分布 [member_id, stance, confidence] */
   member_stances?: Record<string, { stance: Stance; confidence: number }>;
+  selected_expert_ids?: MemberId[];
+  expert_selection_reasons?: Record<string, string>;
+  agent_results?: Record<
+    string,
+    {
+      result: {
+        stance: Stance;
+        confidence: number;
+        thesis: string;
+        evidence_refs?: string[];
+        assumptions?: string[];
+        unknowns?: string[];
+        reversal_conditions?: string[];
+        next_actions?: string[];
+        degraded?: boolean;
+        degradation_reason?: string | null;
+      };
+      evidence?: Array<{
+        evidence_id: string;
+        claim_summary: string;
+        source_title: string;
+        source_url?: string | null;
+        source_domain?: string;
+        strength: "high" | "medium" | "low";
+      }>;
+      metrics?: {
+        reason_steps?: number;
+        tool_calls?: number;
+        duration_ms?: number;
+      };
+    }
+  >;
+  research_degraded?: boolean;
+  research_error?: string | null;
 }
 
-export type MemberStatus = "idle" | "thinking" | "speaking" | "done" | "error";
+export type MemberStatus =
+  | "idle"
+  | "thinking"
+  | "using_tool"
+  | "organizing"
+  | "speaking"
+  | "done"
+  | "degraded"
+  | "error";
 
 /** 8 个固定场景（与后端 topic_templates 表的 sort_order 一致） */
 export interface TopicTemplate {
