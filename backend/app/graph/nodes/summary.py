@@ -13,6 +13,7 @@ import json
 import re
 
 from app.llm import get_llm
+from app.agents.profiles import runtime_member_info
 
 
 MEMBER_INFO: dict[str, tuple[str, str]] = {
@@ -36,7 +37,7 @@ SUMMARY_PROMPT = """你是邪杠议会当选议长。
 
 ## 议会信息
 议题：{topic}
-当选议长：{chair}（{chair_role}派）
+当选议长：{chair}（{chair_role}）
 是否兜底任命：{fallback_note}
 
 ## 5 议员立场摘要
@@ -106,7 +107,8 @@ def run_summary(state: dict) -> dict:
     chair_id = election.get("winner", "fan")
     fallback_used = election.get("fallback_used", False)
 
-    chair_name, chair_role = MEMBER_INFO.get(chair_id, ("反对", "反共识"))
+    member_info = runtime_member_info(state, MEMBER_INFO)
+    chair_name, chair_role = member_info.get(chair_id, ("会议主持", "综合议会观点"))
 
     # 5 议员立场摘要
     members_lines = []

@@ -12,6 +12,7 @@ from app.graph.nodes.election import run_election
 from app.graph.nodes.parse_topic import parse_topic
 from app.graph.nodes.parallel_research import parallel_research
 from app.graph.nodes.round_debate import run_debate_round
+from app.graph.nodes.select_experts import select_experts
 from app.graph.nodes.summary import run_summary
 from app.graph.state import ParliamentState
 
@@ -35,13 +36,15 @@ def build_parliament_graph(checkpointer=None):
 
     workflow.add_node("parse_topic", parse_topic)
     workflow.add_node("research", parallel_research)
+    workflow.add_node("select_experts", select_experts)
     workflow.add_node("debate", run_debate_round)
     workflow.add_node("election", run_election)
     workflow.add_node("summary", run_summary)
     workflow.add_node("archive", run_archive)
 
     workflow.set_entry_point("parse_topic")
-    workflow.add_edge("parse_topic", "research")
+    workflow.add_edge("parse_topic", "select_experts")
+    workflow.add_edge("select_experts", "research")
     workflow.add_edge("research", "debate")
 
     workflow.add_conditional_edges(

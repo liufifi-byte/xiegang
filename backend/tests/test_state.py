@@ -12,6 +12,10 @@ def test_make_initial_state_has_all_fields():
         "transcript", "tool_calls", "election_result", "summary",
         "user_interrupt", "interrupt_pending",
         "parliament_id", "started_at",
+        "selected_expert_ids", "expert_selection_reasons",
+        "debate_duties",
+        "agent_results", "agent_traces",
+        "research_degraded", "research_error",
     }
     assert required_keys.issubset(state.keys()), f"missing: {required_keys - state.keys()}"
 

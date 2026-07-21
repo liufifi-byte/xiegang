@@ -17,6 +17,7 @@ from app.llm import get_structured_llm
 from app.llm_concurrency import get_llm_semaphore
 from app.runtime_context import consume_user_interrupt
 from app.schemas.member import MemberStatement
+from app.agents.profiles import DUTY_LABELS, runtime_member_info
 
 
 # 议员 mapping：id → (display_name, role_label)
@@ -29,7 +30,7 @@ MEMBER_INFO: dict[str, tuple[str, str]] = {
 }
 
 
-DEBATE_PROMPT = """你是{member_name}，邪杠议会{member_role}派议员。
+DEBATE_PROMPT = """你是{member_name}，本场专业身份与任务是：{member_role}。
 
 ## 当前议会状态
 【议题】{topic}
@@ -178,13 +179,25 @@ async def run_debate_round(state: dict) -> dict:
         # 因为新的 history 已包含用户插话，重算 history_str
         history_str = _format_history(new_transcript, "", next_round)
 
-    # 5 议员并发
+    member_info = runtime_member_info(state, MEMBER_INFO)
+    debate_duties = state.get("debate_duties", {})
+
+    # 本场 5 位议员并发。职业方法保持稳定，议会职责只约束本轮审查重点。
     tasks = [
         _debate_member_safe(
-            mid, name, role, topic, variables, next_round,
+            mid,
+            name,
+            (
+                f"{role} 本轮额外负责{DUTY_LABELS.get(debate_duties.get(mid, ''), '专业质询')}"
+                if state.get("selected_expert_ids")
+                else role
+            ),
+            topic,
+            variables,
+            next_round,
             history_str, user_interrupt, parliament_id,
         )
-        for mid, (name, role) in MEMBER_INFO.items()
+        for mid, (name, role) in member_info.items()
     ]
     results = await asyncio.gather(*tasks)
 

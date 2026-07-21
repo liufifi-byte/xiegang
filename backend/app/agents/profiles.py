@@ -109,3 +109,71 @@ def get_expert_profile(expert_id: str) -> ExpertProfile:
 
 def list_expert_profiles() -> list[ExpertProfile]:
     return list(EXPERT_PROFILES.values())
+
+
+PARLIAMENT_DUTIES = (
+    "evidence_audit",
+    "downside_risk",
+    "opportunity_scan",
+    "long_term_path",
+    "contrarian_challenge",
+)
+
+_DUTY_PREFERENCES: dict[str, tuple[str, ...]] = {
+    "evidence_audit": (
+        "mathematician", "historian", "economist", "psychologist", "politician", "artist"
+    ),
+    "downside_risk": (
+        "economist", "politician", "psychologist", "mathematician", "historian", "artist"
+    ),
+    "opportunity_scan": (
+        "artist", "economist", "politician", "psychologist", "historian", "mathematician"
+    ),
+    "long_term_path": (
+        "historian", "psychologist", "artist", "economist", "politician", "mathematician"
+    ),
+    "contrarian_challenge": (
+        "politician", "artist", "psychologist", "historian", "economist", "mathematician"
+    ),
+}
+
+DUTY_LABELS = {
+    "evidence_audit": "证据审查",
+    "downside_risk": "下行风险",
+    "opportunity_scan": "机会识别",
+    "long_term_path": "长期影响",
+    "contrarian_challenge": "反方挑战",
+}
+
+
+def assign_parliament_duties(expert_ids: list[str]) -> dict[str, str]:
+    """Assign every selected expert one cross-examination duty."""
+    remaining = set(expert_ids)
+    assignment: dict[str, str] = {}
+    for duty in PARLIAMENT_DUTIES:
+        chosen = next(
+            (candidate for candidate in _DUTY_PREFERENCES[duty] if candidate in remaining),
+            None,
+        )
+        if chosen is None:
+            break
+        assignment[chosen] = duty
+        remaining.remove(chosen)
+    return assignment
+
+
+def runtime_member_info(
+    state: dict,
+    legacy: dict[str, tuple[str, str]],
+) -> dict[str, tuple[str, str]]:
+    selected = state.get("selected_expert_ids") or []
+    if not selected:
+        return legacy
+    return {
+        expert_id: (
+            EXPERT_PROFILES[expert_id].display_name,
+            EXPERT_PROFILES[expert_id].professional_identity,
+        )
+        for expert_id in selected
+        if expert_id in EXPERT_PROFILES
+    }

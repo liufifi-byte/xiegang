@@ -12,11 +12,11 @@
    - 任一评分 = 0 → 反对 任议长
    - 主调度公开声明兜底理由
 """
-import json
 import time
 
-from app.llm import get_llm, get_structured_llm
+from app.llm import get_structured_llm
 from app.schemas.member import ElectionPitch
+from app.agents.profiles import runtime_member_info
 
 
 MEMBER_INFO: dict[str, tuple[str, str]] = {
@@ -31,7 +31,7 @@ MEMBER_INFO: dict[str, tuple[str, str]] = {
 FALLBACK_CHAIR = "fan"
 
 
-PITCH_PROMPT = """你是{member_name}，邪杠议会{member_role}派议员。
+PITCH_PROMPT = """你是{member_name}，本场专业身份是：{member_role}。
 
 ## 当前议会状态
 议题：{topic}
@@ -122,8 +122,10 @@ def _generate_pitches(state: dict) -> list[ElectionPitch]:
         )
     other_text = "\n".join(other_lines) if other_lines else "（无）"
 
+    member_info = runtime_member_info(state, MEMBER_INFO)
+    fallback_chair = _fallback_chair_for_state(state, member_info)
     pitches: list[ElectionPitch] = []
-    for mid, (name, role) in MEMBER_INFO.items():
+    for mid, (name, role) in member_info.items():
         prompt = PITCH_PROMPT.format(
             member_name=name,
             member_role=role,
@@ -137,12 +139,18 @@ def _generate_pitches(state: dict) -> list[ElectionPitch]:
             pitch.member_id = mid
             # 强制约束：不能推荐自己
             if pitch.recommend_target == mid:
-                pitch.recommend_target = FALLBACK_CHAIR
+                pitch.recommend_target = next(
+                    candidate for candidate in member_info if candidate != mid
+                )
             pitches.append(pitch)
         except Exception:
             pitches.append(ElectionPitch(
                 member_id=mid,
-                recommend_target=FALLBACK_CHAIR,
+                recommend_target=(
+                    fallback_chair
+                    if fallback_chair != mid
+                    else next(candidate for candidate in member_info if candidate != mid)
+                ),
                 target_specific_view="[ERROR]",
                 target_blind_spot="[ERROR]",
                 own_bias="[ERROR] 我的偏见是生成失败",
@@ -156,17 +164,36 @@ def _score_all_pitches(pitches: list[ElectionPitch]) -> dict[str, int]:
     return {p.member_id: _score_pitch(p) for p in pitches}
 
 
+def _fallback_chair_for_state(
+    state: dict,
+    member_info: dict[str, tuple[str, str]] | None = None,
+) -> str:
+    member_info = member_info or runtime_member_info(state, MEMBER_INFO)
+    if not state.get("selected_expert_ids"):
+        return FALLBACK_CHAIR
+    duties = state.get("debate_duties", {})
+    contrarian = next(
+        (mid for mid, duty in duties.items() if duty == "contrarian_challenge"),
+        None,
+    )
+    if contrarian in member_info:
+        return contrarian
+    return next(iter(member_info))
+
+
 def run_election(state: dict) -> dict:
     """LangGraph 节点：议长选举。"""
     pitches = _generate_pitches(state)
     scores = _score_all_pitches(pitches)
+    member_info = runtime_member_info(state, MEMBER_INFO)
+    fallback_chair = _fallback_chair_for_state(state, member_info)
 
     # 计算每个议员的得票：被推荐次数 × 推荐者评分
     vote_tally: dict[str, float] = {}
     recommenders: dict[str, list[str]] = {}
     for p in pitches:
         target = p.recommend_target
-        if target not in MEMBER_INFO:
+        if target not in member_info:
             # 推荐了无效 ID，丢弃
             continue
         if target == p.member_id:
@@ -185,16 +212,16 @@ def run_election(state: dict) -> dict:
 
     # 兜底条件 1：票太分散
     if total_votes > 0 and (max_votes / total_votes) < 0.3:
-        winner = FALLBACK_CHAIR
+        winner = fallback_chair
         fallback_reason = "票过于分散（最高票 < 总票数 30%）"
 
     # 兜底条件 2：所有发言评分都 == 0
     elif all(s == 0 for s in scores.values()):
-        winner = FALLBACK_CHAIR
+        winner = fallback_chair
         fallback_reason = "所有议员发言评分均为 0（推荐理由质量不达标）"
 
     elif not winner:
-        winner = FALLBACK_CHAIR
+        winner = fallback_chair
         fallback_reason = "无有效投票"
 
     fallback_used = fallback_reason is not None

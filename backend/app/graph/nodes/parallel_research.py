@@ -13,6 +13,14 @@ import asyncio
 import time
 from pathlib import Path
 
+from app.agents.harness import AgentBudget
+from app.agents.profiles import get_expert_profile
+from app.agents.runner import ExpertResearchAgentRunner
+from app.agents.schemas import ExpertResearchResult
+from app.agents.tool_registry import ParliamentToolCache, ToolRegistry
+from app.agents.trace import AgentTraceSink
+from app.config import get_settings
+
 from app.llm import get_structured_llm
 from app.llm_concurrency import get_llm_semaphore
 from app.schemas.member import MemberStatement
@@ -159,6 +167,15 @@ async def parallel_research(state: dict) -> dict:
 
     V2-S3: 真用 GLM embedding + pgvector 检索历史议会摘要，注入 prompt。
     """
+    # 新议会经 select_experts 后进入真正 ReAct Agent 路径。
+    # 没有 selected_expert_ids 的旧测试/旧 checkpoint 继续使用 legacy 路径。
+    settings = get_settings()
+    if (
+        state.get("selected_expert_ids")
+        and settings.expert_research_mode == "react_agent"
+    ):
+        return await _parallel_agent_research(state)
+
     topic = state["topic"]
     variables = state["briefing"].get("key_variables", [])
     member_ids = list(MEMBER_TOOLS.keys())
@@ -266,3 +283,203 @@ async def _research_for_member_safe(
         return {"ok": True, "data": stmt, "tool_calls": tool_call_records}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+async def _run_one_expert_safe(
+    expert_id: str,
+    state: dict,
+    registry: ToolRegistry,
+    checkpointer=None,
+) -> dict:
+    """Run one professional agent without allowing a single failure to fan out."""
+    settings = get_settings()
+    parliament_id = state.get("parliament_id") or "_no_parliament"
+    trace_sink = (
+        AgentTraceSink(parliament_id)
+        if state.get("parliament_id")
+        else AgentTraceSink(parliament_id, writer=lambda *_: 0)
+    )
+
+    async def cancel_check() -> bool:
+        if not state.get("parliament_id"):
+            return False
+        from app.runtime_context import is_cancelled
+
+        return await is_cancelled(parliament_id)
+
+    budget = AgentBudget(
+        max_reason_steps=settings.agent_max_reason_steps,
+        max_tool_calls=settings.agent_max_tool_calls,
+        tool_timeout_seconds=settings.agent_tool_timeout_seconds,
+        total_timeout_seconds=settings.agent_total_timeout_seconds,
+        max_observation_chars=settings.agent_max_observation_chars,
+        max_evidence=settings.agent_max_evidence,
+    )
+    runner = ExpertResearchAgentRunner(
+        parliament_id=parliament_id,
+        profile=get_expert_profile(expert_id),
+        registry=registry,
+        trace_sink=trace_sink,
+        budget=budget,
+        user_id=state.get("user_id"),
+        category=state.get("category") or "general",
+        sensitive_values=state.get("briefing", {}).get("sensitive_values", []),
+        cancel_check=cancel_check,
+    )
+    user_brief = {
+        "summary": state.get("briefing", {}).get("summary", state["topic"]),
+        "key_variables": state.get("briefing", {}).get("key_variables", []),
+        "background": state.get("user_background") or "（用户未提供额外背景）",
+    }
+    try:
+        result_state = await asyncio.wait_for(
+            runner.run(
+                goal=state["topic"],
+                user_brief=user_brief,
+                checkpointer=checkpointer,
+            ),
+            timeout=settings.agent_total_timeout_seconds + 5,
+        )
+        return {"ok": True, "expert_id": expert_id, "state": result_state}
+    except Exception as exc:
+        return {
+            "ok": False,
+            "expert_id": expert_id,
+            "error": f"{type(exc).__name__}: {exc}",
+            "trace_events": [
+                event.model_dump(mode="json") for event in trace_sink.events
+            ],
+        }
+
+
+def _agent_result_to_member(
+    expert_id: str,
+    result: ExpertResearchResult,
+    evidence_records: list[dict],
+) -> dict:
+    evidence_by_id = {
+        record.get("evidence_id"): record for record in evidence_records
+    }
+    evidence = []
+    for ref in result.evidence_refs:
+        record = evidence_by_id.get(ref)
+        if not record:
+            continue
+        evidence.append(
+            {
+                "claim": record.get("claim_summary", ""),
+                "source": record.get("source_url")
+                or record.get("source_title")
+                or "",
+                "strength": record.get("strength", "medium"),
+                "evidence_id": ref,
+            }
+        )
+    return {
+        "member_id": expert_id,
+        "stance": result.stance,
+        "confidence": result.confidence,
+        "evidence": evidence,
+        "reasoning_summary": result.thesis,
+        "assumptions": result.assumptions,
+        "unknowns": result.unknowns,
+        "reversal_conditions": result.reversal_conditions,
+        "next_actions": result.next_actions,
+        "degraded": result.degraded,
+        "degradation_reason": result.degradation_reason,
+    }
+
+
+async def _parallel_agent_research(state: dict) -> dict:
+    """Run five independent professional ReAct agents in parallel."""
+    selected = list(state.get("selected_expert_ids", []))[:5]
+    registry = ToolRegistry(cache=ParliamentToolCache())
+    checkpointer = None
+    if state.get("parliament_id"):
+        try:
+            from app.checkpointer import get_checkpointer
+
+            checkpointer = await get_checkpointer()
+        except Exception:
+            # Agent still runs; outer worker and trace store remain the fallback.
+            checkpointer = None
+
+    outcomes = await asyncio.gather(
+        *[
+            _run_one_expert_safe(expert_id, state, registry, checkpointer)
+            for expert_id in selected
+        ]
+    )
+
+    members: dict[str, dict] = {}
+    agent_results: dict[str, dict] = {}
+    trace_events: list[dict] = list(state.get("agent_traces", []))
+    tool_calls = list(state.get("tool_calls", []))
+    research_entries: list[dict] = []
+    successes = 0
+
+    for outcome in outcomes:
+        expert_id = outcome["expert_id"]
+        if outcome["ok"]:
+            successes += 1
+            agent_state = outcome["state"]
+            result = ExpertResearchResult.model_validate(agent_state["final_result"])
+            evidence_records = agent_state.get("evidence_ledger", [])
+            member = _agent_result_to_member(expert_id, result, evidence_records)
+            members[expert_id] = member
+            agent_results[expert_id] = {
+                "result": result.model_dump(mode="json"),
+                "evidence": evidence_records,
+                "metrics": agent_state.get("metrics", {}),
+            }
+            expert_traces = agent_state.get("trace_events", [])
+            trace_events.extend(expert_traces)
+            for action in agent_state.get("safe_action_history", []):
+                tool_calls.append({"member": expert_id, **action})
+        else:
+            error = outcome.get("error", "unknown agent error")
+            member = {
+                "member_id": expert_id,
+                "stance": "neutral",
+                "confidence": 0.0,
+                "evidence": [],
+                "reasoning_summary": "该专家本轮调研未完成。",
+                "assumptions": [],
+                "unknowns": [error],
+                "reversal_conditions": ["重新完成专家调研"],
+                "next_actions": [],
+                "degraded": True,
+                "degradation_reason": error,
+            }
+            members[expert_id] = member
+            agent_results[expert_id] = {"result": member, "evidence": [], "metrics": {}}
+            trace_events.extend(outcome.get("trace_events", []))
+
+        research_entries.append(
+            {
+                "speaker": expert_id,
+                "round": 0,
+                "type": "research",
+                "stance": member["stance"],
+                "content": member["reasoning_summary"],
+                "evidence": member["evidence"],
+                "confidence": member["confidence"],
+                "degraded": member.get("degraded", False),
+            }
+        )
+
+    insufficient = successes < 3
+    return {
+        "members": members,
+        "agent_results": agent_results,
+        "agent_traces": trace_events,
+        "tool_calls": tool_calls,
+        "current_round": 0,
+        "transcript": state.get("transcript", []) + research_entries,
+        "research_degraded": insufficient,
+        "research_error": (
+            f"仅 {successes} 位专家完成调研，无法形成高置信度结论"
+            if insufficient
+            else None
+        ),
+    }

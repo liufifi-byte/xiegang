@@ -1,6 +1,5 @@
 """election 节点测试。"""
 from app.graph.nodes.election import (
-    FALLBACK_CHAIR,
     _generate_pitches,
     _score_all_pitches,
     _score_pitch,
@@ -225,3 +224,35 @@ def test_run_election_writes_to_transcript(monkeypatch):
     election_entries = [e for e in result["transcript"] if e["type"] == "election"]
     assert len(election_entries) == 1
     assert "chen" in election_entries[0]["content"]
+
+
+def test_run_election_accepts_dynamic_professional_ids(monkeypatch):
+    from app.graph.nodes import election as el_module
+
+    selected = [
+        "mathematician", "economist", "psychologist", "artist", "politician"
+    ]
+
+    def mock_generate(state):
+        targets = {
+            "mathematician": "economist",
+            "economist": "politician",
+            "psychologist": "politician",
+            "artist": "politician",
+            "politician": "economist",
+        }
+        return [
+            _mk_pitch(member_id=mid, recommend_target=targets[mid])
+            for mid in selected
+        ]
+
+    monkeypatch.setattr(el_module, "_generate_pitches", mock_generate)
+    state = {
+        "topic": "是否接 Offer",
+        "members": {},
+        "selected_expert_ids": selected,
+        "debate_duties": {"psychologist": "contrarian_challenge"},
+    }
+    result = run_election(state)
+    assert result["election_result"]["winner"] in selected
+    assert set(result["election_result"]["vote_tally"]) <= set(selected)

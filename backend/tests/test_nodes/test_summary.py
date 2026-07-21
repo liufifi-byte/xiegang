@@ -146,3 +146,35 @@ def test_run_summary_falls_back_on_bad_response(monkeypatch):
     result = run_summary(state)
     assert "未能生成" in result["summary"]["advice"] or "test error" in result["summary"]["advice"]
     assert result["summary"]["chair"] == "fan"
+
+
+def test_run_summary_uses_professional_chair_name(monkeypatch):
+    from app.graph.nodes import summary as sm_module
+
+    valid_json = json.dumps({
+        "consensus": ["x"],
+        "dissent": [],
+        "blind_spots": ["y"],
+        "advice": "这是综合建议，不是正确答案",
+        "open_questions": [],
+    })
+
+    class MockLLM:
+        def invoke(self, prompt):
+            class R:
+                content = valid_json
+            return R()
+
+    monkeypatch.setattr(sm_module, "get_llm", lambda **kwargs: MockLLM())
+    state = {
+        "topic": "x",
+        "election_result": {"winner": "economist", "fallback_used": False},
+        "selected_expert_ids": [
+            "mathematician", "economist", "psychologist", "artist", "politician"
+        ],
+        "members": {"economist": {"stance": "for", "confidence": 0.7}},
+        "transcript": [],
+    }
+    result = run_summary(state)
+    assert result["summary"]["chair"] == "economist"
+    assert result["summary"]["chair_name"] == "经济学家"

@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     agent_research_node_timeout_seconds: int = 75
     agent_max_observation_chars: int = 4000
     agent_max_evidence: int = 3
+    expert_research_mode: str = "react_agent"
 
 
 @lru_cache

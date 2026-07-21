@@ -16,6 +16,15 @@ class ParliamentState(TypedDict):
     briefing: dict[str, Any]      # {key_variables: [...], summary: "..."}
     category: str | None          # 'real_estate'|'gold'|...|'general'
 
+    # === 本场职业专家 ===
+    selected_expert_ids: list[str]
+    expert_selection_reasons: dict[str, str]
+    debate_duties: dict[str, str]
+    agent_results: dict[str, dict]
+    agent_traces: list[dict]
+    research_degraded: bool
+    research_error: str | None
+
     # === 5 议员状态 ===
     members: dict[str, dict]      # {suan: {stance, evidence, reasoning, ...}}
 
@@ -55,6 +64,13 @@ def make_initial_state(
         "user_background": user_background,
         "briefing": {},
         "category": None,
+        "selected_expert_ids": [],
+        "expert_selection_reasons": {},
+        "debate_duties": {},
+        "agent_results": {},
+        "agent_traces": [],
+        "research_degraded": False,
+        "research_error": None,
         "members": {},
         "current_round": 0,
         "max_rounds": 3,

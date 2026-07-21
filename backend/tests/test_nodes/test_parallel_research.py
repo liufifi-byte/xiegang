@@ -1,8 +1,6 @@
 """parallel_research 节点测试（V1-S2 async 版）。"""
 import asyncio
 
-import pytest
-
 from app.graph.nodes.parallel_research import (
     MEMBER_TOOLS,
     _load_prompt_template,
@@ -137,3 +135,105 @@ def test_semaphore_can_be_created():
     from app.llm_concurrency import get_llm_semaphore
     sem = get_llm_semaphore()
     assert sem is not None
+
+
+def test_parallel_research_runs_selected_expert_agents(monkeypatch):
+    """Selected professional IDs switch the node to the ReAct agent path."""
+    from app.graph.nodes import parallel_research as pr_module
+
+    async def fake_run(expert_id, state, registry, checkpointer=None):
+        return {
+            "ok": True,
+            "expert_id": expert_id,
+            "state": {
+                "final_result": {
+                    "agent_id": expert_id,
+                    "stance": "for",
+                    "confidence": 0.7,
+                    "thesis": f"{expert_id} conclusion",
+                    "evidence_refs": [],
+                    "assumptions": [],
+                    "unknowns": [],
+                    "reversal_conditions": ["条件改变"],
+                    "next_actions": [],
+                    "tool_calls_used": 0,
+                    "degraded": False,
+                    "degradation_reason": None,
+                },
+                "evidence_ledger": [],
+                "safe_action_history": [],
+                "trace_events": [],
+                "metrics": {"reason_steps": 1, "tool_calls": 0},
+            },
+        }
+
+    monkeypatch.setattr(pr_module, "_run_one_expert_safe", fake_run)
+    selected = [
+        "mathematician",
+        "economist",
+        "psychologist",
+        "artist",
+        "politician",
+    ]
+    state = {
+        "topic": "要不要接 Offer",
+        "category": "offer",
+        "briefing": {"summary": "Offer", "key_variables": ["薪资"]},
+        "selected_expert_ids": selected,
+        "transcript": [],
+        "tool_calls": [],
+        "agent_traces": [],
+    }
+    result = asyncio.run(parallel_research(state))
+    assert set(result["members"]) == set(selected)
+    assert len(result["transcript"]) == 5
+    assert result["research_degraded"] is False
+
+
+def test_parallel_agent_research_isolates_single_failure(monkeypatch):
+    from app.graph.nodes import parallel_research as pr_module
+
+    async def fake_run(expert_id, state, registry, checkpointer=None):
+        if expert_id == "artist":
+            return {"ok": False, "expert_id": expert_id, "error": "timeout"}
+        return {
+            "ok": True,
+            "expert_id": expert_id,
+            "state": {
+                "final_result": {
+                    "agent_id": expert_id,
+                    "stance": "neutral",
+                    "confidence": 0.5,
+                    "thesis": "ok",
+                    "evidence_refs": [],
+                    "assumptions": [],
+                    "unknowns": [],
+                    "reversal_conditions": ["新信息"],
+                    "next_actions": [],
+                    "tool_calls_used": 0,
+                    "degraded": False,
+                    "degradation_reason": None,
+                },
+                "evidence_ledger": [],
+                "safe_action_history": [],
+                "trace_events": [],
+                "metrics": {},
+            },
+        }
+
+    monkeypatch.setattr(pr_module, "_run_one_expert_safe", fake_run)
+    state = {
+        "topic": "x",
+        "category": "general",
+        "briefing": {},
+        "selected_expert_ids": [
+            "mathematician", "economist", "psychologist", "artist", "politician"
+        ],
+        "transcript": [],
+        "tool_calls": [],
+        "agent_traces": [],
+    }
+    result = asyncio.run(parallel_research(state))
+    assert result["members"]["artist"]["degraded"] is True
+    assert result["members"]["economist"]["confidence"] == 0.5
+    assert result["research_degraded"] is False

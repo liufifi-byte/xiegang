@@ -195,3 +195,46 @@ def test_run_debate_round_injects_user_interrupt(monkeypatch):
     assert len(interrupt_entries) == 1
     assert interrupt_entries[0]["content"] == "预算 30w 上下"
     assert interrupt_entries[0]["speaker"] == "user"
+
+
+def test_run_debate_round_uses_selected_professional_experts(monkeypatch):
+    from app.graph.nodes import round_debate as rd_module
+    from app.schemas.member import MemberStatement
+
+    captured = {}
+
+    async def mock_debate(mid, name, role, topic, variables, round_num, history, user_interrupt=None, parliament_id=None):
+        captured[mid] = (name, role)
+        return MemberStatement(
+            member_id=mid,
+            stance="neutral",
+            confidence=0.5,
+            evidence=[],
+            reasoning_summary="professional reply",
+        )
+
+    monkeypatch.setattr(rd_module, "_debate_one_member_async", mock_debate)
+    selected = [
+        "mathematician", "economist", "psychologist", "artist", "politician"
+    ]
+    state = {
+        "topic": "是否接 Offer",
+        "briefing": {"key_variables": []},
+        "members": {},
+        "tool_calls": [],
+        "transcript": [],
+        "current_round": 0,
+        "selected_expert_ids": selected,
+        "debate_duties": {
+            "mathematician": "evidence_audit",
+            "economist": "downside_risk",
+            "artist": "opportunity_scan",
+            "psychologist": "long_term_path",
+            "politician": "contrarian_challenge",
+        },
+    }
+    result = asyncio.run(run_debate_round(state))
+    assert set(captured) == set(selected)
+    assert captured["mathematician"][0] == "数学家"
+    assert "证据审查" in captured["mathematician"][1]
+    assert len([e for e in result["transcript"] if e["type"] == "debate"]) == 5
