@@ -178,3 +178,26 @@ def test_run_summary_uses_professional_chair_name(monkeypatch):
     result = run_summary(state)
     assert result["summary"]["chair"] == "economist"
     assert result["summary"]["chair_name"] == "经济学家"
+
+
+def test_summary_archives_safe_agent_research_metadata(monkeypatch):
+    from app.graph.nodes import summary as sm_module
+
+    class BrokenLLM:
+        def invoke(self, prompt):
+            raise RuntimeError("use fallback")
+
+    monkeypatch.setattr(sm_module, "get_llm", lambda **kwargs: BrokenLLM())
+    state = {
+        "topic": "x",
+        "election_result": {"winner": "economist"},
+        "selected_expert_ids": ["economist"],
+        "expert_selection_reasons": {"economist": "机会成本"},
+        "agent_results": {"economist": {"result": {"thesis": "x"}}},
+        "research_degraded": False,
+        "members": {},
+        "transcript": [],
+    }
+    summary = run_summary(state)["summary"]
+    assert summary["selected_expert_ids"] == ["economist"]
+    assert summary["agent_results"]["economist"]["result"]["thesis"] == "x"

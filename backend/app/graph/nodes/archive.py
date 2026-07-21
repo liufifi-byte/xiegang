@@ -24,12 +24,21 @@ def run_archive(state: dict) -> dict:
         # 1. 更新 parliaments 行（V2-S3 P0-S1 修复：字段名 + 补全 finished_at/duration/status）
         started_at = state.get("started_at")
         duration = int(time.time() - started_at) if started_at else None
+        archived_tool_calls = list(state.get("tool_calls", []))
+        archived_tool_calls.extend(
+            {
+                "member": trace.get("agent_id"),
+                "action": "agent_trace",
+                "trace": trace,
+            }
+            for trace in state.get("agent_traces", [])
+        )
         update_data = {
             "status": "done",
             "topic_category": state.get("category"),  # 字段名修复：原 "category" 不存在
             "members_state": state.get("members", {}),
             "transcript": state.get("transcript", []),
-            "tool_calls": state.get("tool_calls", []),
+            "tool_calls": archived_tool_calls,
             "election_result": state.get("election_result"),
             "summary": state.get("summary"),
             "tension_score": state.get("tension_score", 0.0),

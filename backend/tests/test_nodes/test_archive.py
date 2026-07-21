@@ -93,3 +93,41 @@ def test_archive_computes_duration(monkeypatch):
     result = run_archive(state)
     assert "total_duration_seconds" in result
     assert 90 < result["total_duration_seconds"] < 110
+
+
+def test_archive_persists_safe_agent_traces_in_tool_calls(monkeypatch):
+    from app.graph.nodes import archive as ar_module
+
+    captured = {}
+
+    class MockTable:
+        def update(self, data):
+            captured.update(data)
+            return self
+        def eq(self, *args):
+            return self
+        def insert(self, row):
+            return self
+        def execute(self):
+            class Result:
+                data = []
+            return Result()
+
+    class MockSupabase:
+        def table(self, name):
+            return MockTable()
+
+    monkeypatch.setattr(ar_module, "get_supabase", lambda: MockSupabase())
+    monkeypatch.setattr("app.embedding.embed_query_sync", lambda text: None)
+    state = {
+        "parliament_id": "p-agent",
+        "topic": "x",
+        "category": "general",
+        "members": {},
+        "summary": {},
+        "tool_calls": [],
+        "agent_traces": [{"agent_id": "economist", "phase": "started"}],
+    }
+    run_archive(state)
+    assert captured["tool_calls"][0]["action"] == "agent_trace"
+    assert captured["tool_calls"][0]["trace"]["phase"] == "started"

@@ -83,3 +83,46 @@ def test_list_parliaments_returns_items(client, monkeypatch):
     data = response.json()
     assert len(data["items"]) == 2
     assert data["items"][0]["topic"] == "买房"
+
+
+def test_parliament_get_returns_archived_agent_research(client, monkeypatch):
+    from app.api import parliament as parl_api
+
+    class MockSupabase:
+        def table(self, name):
+            class Chain:
+                def select(self, *args):
+                    return self
+                def eq(self, *args):
+                    return self
+                def single(self):
+                    return self
+                def execute(self):
+                    class Result:
+                        data = {
+                            "id": "p1",
+                            "topic": "Offer",
+                            "status": "done",
+                            "created_at": "2026-07-21T00:00:00Z",
+                            "summary": {
+                                "selected_expert_ids": ["economist"],
+                                "agent_results": {"economist": {"result": {"thesis": "x"}}},
+                            },
+                            "transcript": [],
+                            "members_state": {"economist": {"stance": "for"}},
+                            "tool_calls": [
+                                {
+                                    "action": "agent_trace",
+                                    "trace": {"agent_id": "economist", "phase": "started"},
+                                }
+                            ],
+                        }
+                    return Result()
+            return Chain()
+
+    monkeypatch.setattr(parl_api, "get_supabase", lambda: MockSupabase())
+    response = client.get("/api/parliament/p1")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["selected_expert_ids"] == ["economist"]
+    assert data["agent_traces"][0]["phase"] == "started"

@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CreateParliamentRequest(BaseModel):
@@ -19,5 +19,9 @@ class ParliamentResponse(BaseModel):
     created_at: datetime
     finished_at: datetime | None = None
     summary: dict[str, Any] | None = None
-    transcript: list[dict[str, Any]] = []
-    tool_calls: list[dict[str, Any]] = []
+    transcript: list[dict[str, Any]] = Field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    members_state: dict[str, Any] = Field(default_factory=dict)
+    selected_expert_ids: list[str] = Field(default_factory=list)
+    agent_results: dict[str, Any] = Field(default_factory=dict)
+    agent_traces: list[dict[str, Any]] = Field(default_factory=list)

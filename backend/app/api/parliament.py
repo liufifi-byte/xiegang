@@ -139,6 +139,8 @@ async def get_parliament(parliament_id: str) -> ParliamentResponse:
         raise HTTPException(status_code=404, detail="Parliament not found")
 
     data = result.data
+    summary = data.get("summary") or {}
+    tool_calls = data.get("tool_calls", [])
     return ParliamentResponse(
         id=data["id"],
         topic=data["topic"],
@@ -147,7 +149,15 @@ async def get_parliament(parliament_id: str) -> ParliamentResponse:
         finished_at=data.get("finished_at"),
         summary=data.get("summary"),
         transcript=data.get("transcript", []),
-        tool_calls=data.get("tool_calls", []),
+        tool_calls=tool_calls,
+        members_state=data.get("members_state", {}),
+        selected_expert_ids=summary.get("selected_expert_ids", []),
+        agent_results=summary.get("agent_results", {}),
+        agent_traces=[
+            item["trace"]
+            for item in tool_calls
+            if item.get("action") == "agent_trace" and isinstance(item.get("trace"), dict)
+        ],
     )
 
 

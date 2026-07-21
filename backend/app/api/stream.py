@@ -15,7 +15,6 @@ from app.config import get_settings
 from app.db import get_supabase
 from app.event_store import fetch_events_since
 from app.middleware.rate_limit import _get_device_id
-from app.monitoring import log_parliament_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +130,7 @@ async def stream_parliament(parliament_id: str, request: Request):
                 sse_data = dict(payload)
                 sse_data["type"] = event_type
                 sse_data["parliament_id"] = parliament_id
+                sse_data["seq"] = e["seq"]
 
                 yield {
                     "event": "message",

@@ -187,4 +187,14 @@ def run_summary(state: dict) -> dict:
         if member_stances:
             summary["member_stances"] = member_stances
 
+    # Agent 调研元数据进入可归档纪要；只含安全结果与证据，不含原始模型消息。
+    if state.get("selected_expert_ids"):
+        summary["selected_expert_ids"] = state["selected_expert_ids"]
+        summary["expert_selection_reasons"] = state.get(
+            "expert_selection_reasons", {}
+        )
+        summary["agent_results"] = state.get("agent_results", {})
+        summary["research_degraded"] = state.get("research_degraded", False)
+        summary["research_error"] = state.get("research_error")
+
     return {"summary": summary}
