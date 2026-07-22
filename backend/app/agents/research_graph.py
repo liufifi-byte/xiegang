@@ -88,9 +88,16 @@ class ExpertResearchGraph:
 
     async def reason_node(self, state: ExpertAgentState) -> dict[str, Any]:
         step = await self.harness.before_reason()
+        force_finish = not self.harness.budget.can_use_tool()
         decision = await self.adapter.decide(
-            build_reason_prompt(state, self.profile, self.harness),
-            self.harness.registry.schemas_for(self.profile),
+            build_reason_prompt(
+                state,
+                self.profile,
+                self.harness,
+                force_finish=force_finish,
+            ),
+            [] if force_finish else self.harness.registry.schemas_for(self.profile),
+            force_finish=force_finish,
         )
         return {
             "decision": decision.model_dump(mode="json"),
@@ -146,7 +153,10 @@ class ExpertResearchGraph:
         await self.harness.before_finalize(state.get("reason_step_count", 0))
         result = self.harness.validate_result(decision.result)
         await self.harness.complete(result)
-        return {"final_result": result.model_dump(mode="json"), "status": "completed"}
+        return {
+            "final_result": result.model_dump(mode="json"),
+            "status": "degraded" if result.degraded else "completed",
+        }
 
     async def forced_finalize_node(self, state: ExpertAgentState) -> dict[str, Any]:
         reason = state.get("last_error") or "agent budget exhausted"

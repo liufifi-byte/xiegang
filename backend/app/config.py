@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     glm_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
     glm_model: str = "glm-5"
     glm_embedding_model: str = "embedding-3"
+    glm_request_timeout_seconds: float = 25.0
+    glm_max_retries: int = 0
 
     # Supabase
     supabase_url: str

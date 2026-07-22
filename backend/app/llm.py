@@ -31,6 +31,8 @@ def get_llm(temperature: float = 0.7, max_tokens: int = 2000):
         openai_api_base=settings.glm_base_url,
         temperature=temperature,
         max_tokens=max_tokens,
+        request_timeout=settings.glm_request_timeout_seconds,
+        max_retries=settings.glm_max_retries,
     )
 
 

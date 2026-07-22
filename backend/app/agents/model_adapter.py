@@ -75,15 +75,18 @@ class StructuredDecisionAdapter:
         *,
         force_finish: bool = False,
     ) -> AgentDecision:
-        suffix = (
-            "\n工具已禁用。你必须返回 action=finish 的结构化结果。"
-            if force_finish
-            else "\n你可以自主选择一个工具，或在信息足够时直接 finish。"
-        )
+        if force_finish:
+            structured_result = get_structured_llm(
+                ExpertResearchResult, temperature=0.3
+            )
+            result = await structured_result.ainvoke(
+                prompt + "\n工具已禁用。只返回最终 ExpertResearchResult。"
+            )
+            return AgentDecision(action="finish", result=result)
+
+        suffix = "\n你可以自主选择一个工具，或在信息足够时直接 finish。"
         structured = get_structured_llm(AgentDecision, temperature=0.3)
         decision = await structured.ainvoke(prompt + suffix)
-        if force_finish and decision.action != "finish":
-            raise ValueError("forced finalization returned a tool action")
         return decision
 
 
@@ -103,11 +106,9 @@ class ResilientDecisionAdapter:
         *,
         force_finish: bool = False,
     ) -> AgentDecision:
+        if force_finish:
+            return await self.fallback.decide(prompt, [], force_finish=True)
         try:
-            return await self.native.decide(
-                prompt, tool_schemas, force_finish=force_finish
-            )
+            return await self.native.decide(prompt, tool_schemas, force_finish=False)
         except Exception:
-            return await self.fallback.decide(
-                prompt, tool_schemas, force_finish=force_finish
-            )
+            return await self.fallback.decide(prompt, tool_schemas, force_finish=False)

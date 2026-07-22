@@ -57,6 +57,10 @@ class AgentBudget:
     def has_time(self) -> bool:
         return self.elapsed_seconds < self.total_timeout_seconds
 
+    @property
+    def remaining_seconds(self) -> float:
+        return max(0.0, self.total_timeout_seconds - self.elapsed_seconds)
+
     def can_reason(self) -> bool:
         return self.has_time() and self.reason_steps_used < self.max_reason_steps
 

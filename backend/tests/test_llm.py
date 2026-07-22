@@ -61,6 +61,8 @@ def test_get_llm_returns_chat_model():
     llm = get_llm()
     assert llm.model_name == "glm-5"
     assert "bigmodel.cn" in str(llm.openai_api_base)
+    assert llm.request_timeout == 25.0
+    assert llm.max_retries == 0
 
 
 def test_get_structured_llm_returns_wrapper():
@@ -121,7 +123,7 @@ def test_structured_wrapper_falls_back_on_fenced_json(monkeypatch):
       - wrapper 应该成功剥出 JSON 并 schema 校验通过
     """
     from app.llm import _StructuredWrapper
-    from app.schemas.member import MemberStatement, Evidence
+    from app.schemas.member import MemberStatement
 
     fenced = '```json\n{"member_id": "suan", "stance": "for", "confidence": 0.8, "evidence": [{"claim": "x", "source": "y", "strength": "high"}], "reasoning_summary": "ok"}\n```'
 

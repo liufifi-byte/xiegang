@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -76,7 +77,38 @@ class ExpertResearchAgentRunner:
         }
         config = {"configurable": {"thread_id": self.harness.run_id}}
         try:
-            final_state = await graph.ainvoke(state, config=config)
+            final_state = await asyncio.wait_for(
+                graph.ainvoke(state, config=config),
+                timeout=max(0.01, self.harness.budget.remaining_seconds),
+            )
+        except TimeoutError:
+            reason = "Agent 总运行时间已达到上限"
+            result = self.harness.validate_result(
+                _fallback_result(self.profile.expert_id, reason),
+                forced_reason=reason,
+            )
+            if (
+                not self.harness.trace_sink.events
+                or self.harness.trace_sink.events[-1].phase != "finalizing"
+            ):
+                await self.harness.before_finalize(
+                    self.harness.budget.reason_steps_used
+                )
+            await self.harness.complete(result)
+            final_state = {
+                **state,
+                "status": "degraded",
+                "last_error": "agent_total_timeout",
+                "final_result": result.model_dump(mode="json"),
+                "evidence_ledger": [
+                    record.model_dump(mode="json")
+                    for record in self.harness.ledger.records
+                ],
+                "safe_action_history": [
+                    action.model_dump(mode="json")
+                    for action in self.harness.safe_actions
+                ],
+            }
         except AgentCancelled:
             await self.harness.failed()
             result = _fallback_result(self.profile.expert_id, "用户取消了会议")

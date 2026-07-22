@@ -1,5 +1,8 @@
+import asyncio
+
 import pytest
 
+from app.agents.harness import AgentBudget
 from app.agents.profiles import get_expert_profile
 from app.agents.runner import ExpertResearchAgentRunner
 from app.agents.schemas import AgentDecision, ExpertResearchResult
@@ -36,3 +39,30 @@ async def test_runner_returns_metrics_and_safe_trace():
     assert state["trace_events"]
     serialized = str(state["trace_events"])
     assert "system prompt" not in serialized.lower()
+
+
+class HangingAdapter:
+    async def decide(self, prompt, tool_schemas, *, force_finish=False):
+        await asyncio.sleep(1)
+        raise AssertionError("the runner should cancel a hung model call")
+
+
+@pytest.mark.asyncio
+async def test_runner_enforces_total_timeout_around_model_calls():
+    runner = ExpertResearchAgentRunner(
+        parliament_id="p-timeout",
+        profile=get_expert_profile("economist"),
+        registry=ToolRegistry(),
+        trace_sink=AgentTraceSink("p-timeout", writer=lambda *args: 1),
+        adapter=HangingAdapter(),
+        budget=AgentBudget(total_timeout_seconds=0.01),
+    )
+    state = await runner.run(goal="是否接 Offer", user_brief={})
+    assert state["status"] == "degraded"
+    assert state["last_error"] == "agent_total_timeout"
+    assert state["final_result"]["degraded"] is True
+    assert state["metrics"]["duration_ms"] < 500
+    assert [event["phase"] for event in state["trace_events"]][-2:] == [
+        "finalizing",
+        "degraded",
+    ]
