@@ -157,7 +157,7 @@ export default function ParliamentPage() {
             setMemberStatus((prev) => {
               const next = { ...prev };
               (Object.keys(payload.members!) as MemberId[]).forEach((k) => {
-                next[k] = "done";
+                next[k] = payload.members?.[k]?.degraded ? "degraded" : "done";
               });
               return next;
             });

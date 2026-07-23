@@ -65,28 +65,57 @@ export function subscribeParliament(
   onError?: (error: Error) => void
 ): () => void {
   const url = `${API_BASE}/api/parliament/${parliamentId}/stream`;
-  const eventSource = new EventSource(url);
+  let eventSource: EventSource | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let stopped = false;
+  let terminalReceived = false;
+  let failedAttempts = 0;
 
-  eventSource.onmessage = (e) => {
-    try {
-      const event: ParliamentStreamEvent = JSON.parse(e.data);
-      onEvent(event);
-      if (
-        event.type === "parliament_done" ||
-        event.type === "cancelled" ||
-        event.type === "error"
-      ) {
-        eventSource.close();
+  const connect = () => {
+    if (stopped || terminalReceived) return;
+    const source = new EventSource(url);
+    eventSource = source;
+
+    source.onopen = () => {
+      failedAttempts = 0;
+    };
+
+    source.onmessage = (e) => {
+      try {
+        const event: ParliamentStreamEvent = JSON.parse(e.data);
+        onEvent(event);
+        if (
+          event.type === "parliament_done" ||
+          event.type === "cancelled" ||
+          event.type === "error"
+        ) {
+          terminalReceived = true;
+          source.close();
+        }
+      } catch (err) {
+        onError?.(err as Error);
       }
-    } catch (err) {
-      onError?.(err as Error);
-    }
+    };
+
+    source.onerror = () => {
+      source.close();
+      if (stopped || terminalReceived) return;
+      failedAttempts += 1;
+      if (failedAttempts >= 5) {
+        stopped = true;
+        onError?.(new Error("SSE 连接出错"));
+        return;
+      }
+      const delay = Math.min(5000, 750 * 2 ** (failedAttempts - 1));
+      reconnectTimer = setTimeout(connect, delay);
+    };
   };
 
-  eventSource.onerror = () => {
-    onError?.(new Error("SSE 连接出错"));
-    eventSource.close();
-  };
+  connect();
 
-  return () => eventSource.close();
+  return () => {
+    stopped = true;
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    eventSource?.close();
+  };
 }
