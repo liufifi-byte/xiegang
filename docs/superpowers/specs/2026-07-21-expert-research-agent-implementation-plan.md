@@ -136,7 +136,7 @@ frontend/components/
 - 定义 `ExpertAgentState` TypedDict。
 - 定义 `AgentDecision`、`ToolRequest`、`ToolObservation`、`EvidenceRecord`、`ExpertResearchResult`、`AgentTraceEvent`。
 - 定义六位职业专家 Profile：数学家、经济学家、心理学家、历史学家、艺术家、政治家。
-- 在配置中增加可环境覆盖的预算默认值：Reason 3 次、工具 2 次、单工具 15 秒、单 Agent 60 秒、研究节点 75 秒。
+- 在配置中增加可环境覆盖的预算默认值：Reason 3 次、工具 1 次、单工具 15 秒、单 Agent 120 秒、研究节点 135 秒。真实 GLM 并发探针表明，一期使用一次高价值工具行动更稳定；五位专家仍由模型自主选择工具和参数。
 
 验证：
 
@@ -713,3 +713,11 @@ pnpm --dir frontend build
 - 后端全量测试和前端生产构建通过；
 - 浏览器完成桌面与 390px 移动端验收；
 - 当前首页用户改动得到保留，没有被 Agent 提交覆盖。
+
+## 9. 实施验收记录
+
+- 后端全量自动化：200 项通过；仅保留 FastAPI 测试客户端依赖的既有弃用告警。
+- 前端：Next.js 生产构建、类型检查和静态页面生成通过。
+- 真实 GLM 探针：成功完成 `Reason → calculator → Observe → 原生结构化 Finish`，并验证超时降级不会无限等待。
+- 浏览器：验证动态五席、并发交错轨迹、搜索与计算展示、专家详情、归档回放、证据链接，以及 390px 无横向溢出。
+- 联调加固：固定场景确定性分流、SSE 指数退避重连、匿名记忆隔离、模型并发限制、单 Agent/议会硬超时、事件存储失败隔离和 Worker 终态持久化。
