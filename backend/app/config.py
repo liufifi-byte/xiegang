@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     glm_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
     glm_model: str = "glm-5"
     glm_embedding_model: str = "embedding-3"
-    glm_request_timeout_seconds: float = 25.0
+    glm_request_timeout_seconds: float = 45.0
     glm_max_retries: int = 0
 
     # Supabase
@@ -46,13 +46,16 @@ class Settings(BaseSettings):
 
     # Expert ReAct Agent 执行预算
     agent_max_reason_steps: int = 3
-    agent_max_tool_calls: int = 2
+    agent_max_tool_calls: int = 1
     agent_tool_timeout_seconds: int = 15
-    agent_total_timeout_seconds: int = 60
-    agent_research_node_timeout_seconds: int = 75
+    agent_total_timeout_seconds: int = 120
+    agent_research_node_timeout_seconds: int = 135
     agent_max_observation_chars: int = 4000
     agent_max_evidence: int = 3
     expert_research_mode: str = "react_agent"
+
+    # LangGraph checkpoint（本地联调可通过环境变量关闭，生产默认开启）
+    langgraph_checkpointer_enabled: bool = True
 
 
 @lru_cache

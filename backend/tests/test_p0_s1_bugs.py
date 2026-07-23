@@ -1,6 +1,5 @@
 """P0-S1.0 修复的回归测试。"""
 import asyncio
-from datetime import datetime
 
 import pytest
 
@@ -70,7 +69,7 @@ def test_archive_writes_correct_field_names(monkeypatch):
         "started_at": 1700000000.0,
         "user_id": "u1",
     }
-    result = run_archive(state)
+    run_archive(state)
 
     # 找到 update 操作
     update_calls = [u for u in captured_updates if u[0] == "update"]
@@ -104,16 +103,17 @@ def test_worker_run_one_parliament_handles_exception(monkeypatch):
 
     monkeypatch.setattr(worker, "get_graph_with_checkpointer", fake_get_graph)
     # mark_running 用 in-memory 路径
-    import os
     monkeypatch.setenv("SKIP_DB_CONTEXT", "true")
 
-    async def fake_append_event(*a, **kw):
+    def fake_append_event(*a, **kw):
         return 1
 
     monkeypatch.setattr(worker, "append_event", fake_append_event)
 
     async def fake_get_or_create(parliament_id):
-        class C: pass
+        class C:
+            pass
+
         return C()
 
     async def fake_noop(*a, **kw):
@@ -122,6 +122,7 @@ def test_worker_run_one_parliament_handles_exception(monkeypatch):
     monkeypatch.setattr(worker, "get_or_create_context", fake_get_or_create)
     monkeypatch.setattr(worker, "mark_running", fake_noop)
     monkeypatch.setattr(worker, "mark_finished", fake_noop)
+    monkeypatch.setattr(worker, "_mark_terminal_status", fake_noop)
 
     task = {
         "id": "p-test",
@@ -134,6 +135,70 @@ def test_worker_run_one_parliament_handles_exception(monkeypatch):
     # 不应该抛异常
     import asyncio
     asyncio.run(worker.run_one_parliament(task))
+
+
+def test_worker_timeout_emits_error_without_false_done(monkeypatch):
+    """超时是一种终止状态，不能紧接着再发送 parliament_done。"""
+    import asyncio
+    from types import SimpleNamespace
+
+    from app import worker
+
+    class FakeSnapshot:
+        next = ()
+
+    class FakeGraph:
+        async def aget_state(self, config):
+            return FakeSnapshot()
+
+        async def astream(self, run_input, config):
+            yield {"parse_topic": {"category": "general"}}
+
+    async def fake_get_graph():
+        return FakeGraph()
+
+    async def fake_context(*args, **kwargs):
+        return SimpleNamespace()
+
+    async def fake_noop(*args, **kwargs):
+        return None
+
+    events = []
+    terminal_statuses = []
+
+    def fake_append_event(parliament_id, event_type, payload):
+        events.append(event_type)
+        return len(events)
+
+    async def fake_terminal_status(parliament_id, status, error_message=None):
+        terminal_statuses.append((status, error_message))
+
+    monkeypatch.setattr(
+        worker,
+        "get_settings",
+        lambda: SimpleNamespace(parliament_total_timeout=-1),
+    )
+    monkeypatch.setattr(worker, "get_graph_with_checkpointer", fake_get_graph)
+    monkeypatch.setattr(worker, "get_or_create_context", fake_context)
+    monkeypatch.setattr(worker, "mark_running", fake_noop)
+    monkeypatch.setattr(worker, "mark_finished", fake_noop)
+    monkeypatch.setattr(worker, "_mark_terminal_status", fake_terminal_status)
+    monkeypatch.setattr(worker, "append_event", fake_append_event)
+
+    asyncio.run(
+        worker.run_one_parliament(
+            {
+                "id": "p-timeout",
+                "topic": "测试超时",
+                "topic_category": "general",
+                "user_background": None,
+                "user_id": None,
+                "device_id": "d1",
+            }
+        )
+    )
+    assert events == ["parliament_started", "error"]
+    assert terminal_statuses == [("failed", "parliament_timeout_-1s")]
 
 
 def test_reclaim_stale_tasks_returns_int(monkeypatch):

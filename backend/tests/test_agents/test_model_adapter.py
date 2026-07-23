@@ -1,6 +1,7 @@
 import pytest
 
 from app.agents.model_adapter import (
+    NativeToolDecisionAdapter,
     ResilientDecisionAdapter,
     StructuredDecisionAdapter,
 )
@@ -45,7 +46,7 @@ async def test_resilient_adapter_falls_back_without_preselecting_action():
 
 
 @pytest.mark.asyncio
-async def test_force_finish_skips_native_and_hides_tools():
+async def test_force_finish_falls_back_when_native_submit_fails():
     fallback = FinishAdapter()
     adapter = ResilientDecisionAdapter(FailingAdapter(), fallback)
     decision = await adapter.decide(
@@ -79,3 +80,37 @@ async def test_structured_force_finish_uses_simpler_result_schema(monkeypatch):
     )
     assert captured["schema"] is ExpertResearchResult
     assert decision.action == "finish"
+
+
+@pytest.mark.asyncio
+async def test_native_force_finish_uses_required_submit_tool(monkeypatch):
+    captured = {}
+
+    class FakeMessage:
+        content = ""
+        tool_calls = [
+            {
+                "name": "submit_expert_result",
+                "args": result().model_dump(mode="json"),
+            }
+        ]
+
+    class FakeLLM:
+        def bind_tools(self, tools, **kwargs):
+            captured["tools"] = tools
+            captured["kwargs"] = kwargs
+            return self
+
+        async def ainvoke(self, prompt):
+            return FakeMessage()
+
+    monkeypatch.setattr(
+        "app.agents.model_adapter.get_llm", lambda **kwargs: FakeLLM()
+    )
+    decision = await NativeToolDecisionAdapter().decide(
+        "prompt", [], force_finish=True
+    )
+    assert decision.action == "finish"
+    assert decision.result.thesis == "信息有限"
+    assert captured["kwargs"]["tool_choice"] == "submit_expert_result"
+    assert captured["tools"][0]["function"]["name"] == "submit_expert_result"

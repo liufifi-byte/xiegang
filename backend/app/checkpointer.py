@@ -52,6 +52,13 @@ async def get_checkpointer() -> AsyncPostgresSaver:
         pool = AsyncConnectionPool(
             conninfo=_clean_db_url(),
             kwargs={"prepare_threshold": None},
+            min_size=0,
+            max_size=10,
+            timeout=10,
+            max_lifetime=300,
+            max_idle=60,
+            reconnect_timeout=30,
+            check=AsyncConnectionPool.check_connection,
             open=False,
         )
         await pool.open()

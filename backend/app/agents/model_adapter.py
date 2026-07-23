@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 from app.agents.schemas import AgentDecision, ExpertResearchResult, ToolRequest
 from app.llm import extract_json_from_text, get_llm, get_structured_llm
+from app.llm_concurrency import get_llm_semaphore
 
 
 class DecisionAdapter(Protocol):
@@ -28,7 +29,20 @@ class NativeToolDecisionAdapter:
         force_finish: bool = False,
     ) -> AgentDecision:
         llm = get_llm(temperature=0.3, max_tokens=1800)
-        if not force_finish:
+        if force_finish:
+            submit_tool = {
+                "type": "function",
+                "function": {
+                    "name": "submit_expert_result",
+                    "description": "提交专家最终研究结论",
+                    "parameters": ExpertResearchResult.model_json_schema(),
+                },
+            }
+            llm = llm.bind_tools(
+                [submit_tool],
+                tool_choice="submit_expert_result",
+            )
+        else:
             openai_tools = [
                 {
                     "type": "function",
@@ -41,9 +55,20 @@ class NativeToolDecisionAdapter:
                 for schema in tool_schemas
             ]
             llm = llm.bind_tools(openai_tools)
-        response = await llm.ainvoke(prompt)
+        async with get_llm_semaphore():
+            response = await llm.ainvoke(prompt)
         tool_calls = getattr(response, "tool_calls", None) or []
-        if tool_calls and not force_finish:
+        if tool_calls and force_finish:
+            call = tool_calls[0]
+            name = call.get("name") if isinstance(call, dict) else call.name
+            args = call.get("args") if isinstance(call, dict) else call.args
+            if name != "submit_expert_result":
+                raise ValueError("forced finalization returned an unexpected tool")
+            return AgentDecision(
+                action="finish",
+                result=ExpertResearchResult.model_validate(args or {}),
+            )
+        if tool_calls:
             call = tool_calls[0]
             name = call.get("name") if isinstance(call, dict) else call.name
             args = call.get("args") if isinstance(call, dict) else call.args
@@ -79,14 +104,16 @@ class StructuredDecisionAdapter:
             structured_result = get_structured_llm(
                 ExpertResearchResult, temperature=0.3
             )
-            result = await structured_result.ainvoke(
-                prompt + "\n工具已禁用。只返回最终 ExpertResearchResult。"
-            )
+            async with get_llm_semaphore():
+                result = await structured_result.ainvoke(
+                    prompt + "\n工具已禁用。只返回最终 ExpertResearchResult。"
+                )
             return AgentDecision(action="finish", result=result)
 
         suffix = "\n你可以自主选择一个工具，或在信息足够时直接 finish。"
         structured = get_structured_llm(AgentDecision, temperature=0.3)
-        decision = await structured.ainvoke(prompt + suffix)
+        async with get_llm_semaphore():
+            decision = await structured.ainvoke(prompt + suffix)
         return decision
 
 
@@ -106,9 +133,15 @@ class ResilientDecisionAdapter:
         *,
         force_finish: bool = False,
     ) -> AgentDecision:
-        if force_finish:
-            return await self.fallback.decide(prompt, [], force_finish=True)
         try:
-            return await self.native.decide(prompt, tool_schemas, force_finish=False)
+            return await self.native.decide(
+                prompt,
+                [] if force_finish else tool_schemas,
+                force_finish=force_finish,
+            )
         except Exception:
-            return await self.fallback.decide(prompt, tool_schemas, force_finish=False)
+            return await self.fallback.decide(
+                prompt,
+                [] if force_finish else tool_schemas,
+                force_finish=force_finish,
+            )

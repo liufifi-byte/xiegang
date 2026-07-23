@@ -342,6 +342,10 @@ async def _run_one_expert_safe(
         )
         return {"ok": True, "expert_id": expert_id, "state": result_state}
     except Exception as exc:
+        try:
+            await runner.harness.failed()
+        except Exception:
+            pass
         return {
             "ok": False,
             "expert_id": expert_id,

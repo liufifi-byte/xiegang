@@ -19,10 +19,10 @@
 并发控制：asyncio.Semaphore(N) 单进程同时跑 N 场议会。
 """
 import asyncio
-import json
 import logging
 import re
 import time
+from datetime import datetime, timezone
 
 import psycopg
 
@@ -106,6 +106,56 @@ def _safe_serialize(obj) -> dict:
     return _make_safe(obj) if isinstance(obj, dict) else {"value": str(obj)}
 
 
+def _append_event_safe(
+    parliament_id: str,
+    event_type: str,
+    payload: dict,
+) -> bool:
+    """Telemetry is best effort and must never terminate the council run."""
+    try:
+        append_event(parliament_id, event_type, payload)
+        return True
+    except Exception as exc:
+        logger.warning(
+            "议会 %s 写入 %s 事件失败，主流程继续: %s",
+            parliament_id,
+            event_type,
+            exc,
+        )
+        return False
+
+
+async def _mark_terminal_status(
+    parliament_id: str,
+    status: str,
+    error_message: str | None = None,
+) -> None:
+    """Persist terminal status through the HTTP API when direct DB telemetry fails."""
+
+    def update() -> None:
+        from app.db import get_supabase
+
+        payload = {
+            "status": status,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "error_message": error_message[:500] if error_message else None,
+        }
+        (
+            get_supabase()
+            .table("parliaments")
+            .update(payload)
+            .eq("id", parliament_id)
+            .execute()
+        )
+
+    try:
+        await asyncio.to_thread(update)
+    except Exception as exc:
+        logger.warning(
+            "议会 %s 写入终态 %s 失败: %s", parliament_id, status, exc
+        )
+
+
 async def run_one_parliament(task: dict) -> None:
     """跑完一场议会。所有异常都被捕获，确认 status 写回 DB。"""
     parliament_id = str(task["id"])
@@ -118,8 +168,9 @@ async def run_one_parliament(task: dict) -> None:
     await get_or_create_context(parliament_id)
     await mark_running(parliament_id)
 
-    start_ts = time.time()
-    append_event(parliament_id, "parliament_started", {
+    start_ts = time.monotonic()
+    terminated_early = False
+    _append_event_safe(parliament_id, "parliament_started", {
         "topic": task["topic"],
         "category": task.get("topic_category"),
     })
@@ -140,14 +191,20 @@ async def run_one_parliament(task: dict) -> None:
 
         async for event in graph.astream(run_input, config=config):
             # 超时检查
-            elapsed = time.time() - start_ts
+            elapsed = time.monotonic() - start_ts
             if elapsed > total_timeout:
                 logger.warning("议会 %s 超时（%ds）", parliament_id, int(elapsed))
                 from app.cancel_guard import cancel_all_inflight
                 await cancel_all_inflight(parliament_id)
-                append_event(parliament_id, "error", {
+                _append_event_safe(parliament_id, "error", {
                     "error": f"议会超时（{total_timeout}s 强制终止）",
                 })
+                await _mark_terminal_status(
+                    parliament_id,
+                    "failed",
+                    f"parliament_timeout_{total_timeout}s",
+                )
+                terminated_early = True
                 break
 
             # cancel 检查
@@ -155,7 +212,11 @@ async def run_one_parliament(task: dict) -> None:
                 logger.info("议会 %s 被用户取消", parliament_id)
                 from app.cancel_guard import cancel_all_inflight
                 await cancel_all_inflight(parliament_id)
-                append_event(parliament_id, "cancelled", {})
+                _append_event_safe(parliament_id, "cancelled", {})
+                await _mark_terminal_status(
+                    parliament_id, "cancelled", "cancelled_by_user"
+                )
+                terminated_early = True
                 break
 
             # 推送 node_complete
@@ -164,24 +225,34 @@ async def run_one_parliament(task: dict) -> None:
                     payload = _safe_serialize(state_update)
                 except Exception:
                     payload = {"error": "serialize_failed"}
-                append_event(parliament_id, "node_complete", {
+                _append_event_safe(parliament_id, "node_complete", {
                     "node": node_name,
                     "payload": payload,
                 })
 
-        # 成功完成
-        append_event(parliament_id, "parliament_done", {})
-        logger.info("议会 %s 完成", parliament_id)
+        if not terminated_early:
+            _append_event_safe(parliament_id, "parliament_done", {})
+            logger.info("议会 %s 完成", parliament_id)
 
     except asyncio.CancelledError:
         logger.warning("议会 %s 被中断", parliament_id)
-        append_event(parliament_id, "error", {"error": "worker interrupted"})
+        _append_event_safe(
+            parliament_id, "error", {"error": "worker interrupted"}
+        )
+        await _mark_terminal_status(
+            parliament_id, "failed", "worker_interrupted"
+        )
         raise
     except Exception as e:
         logger.exception("议会 %s 执行失败: %s", parliament_id, e)
-        append_event(parliament_id, "error", {
+        _append_event_safe(parliament_id, "error", {
             "error": f"parliament execution error: {e}",
         })
+        await _mark_terminal_status(
+            parliament_id,
+            "failed",
+            f"{type(e).__name__}: {e}",
+        )
     finally:
         await mark_finished(parliament_id)
 

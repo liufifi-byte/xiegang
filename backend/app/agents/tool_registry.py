@@ -125,7 +125,11 @@ class ToolRegistry:
         self._tools = {tool.name: tool for tool in tools}
         self.cache = cache or ParliamentToolCache()
 
-    def schemas_for(self, profile: ExpertProfile) -> list[dict[str, Any]]:
+    def schemas_for(
+        self,
+        profile: ExpertProfile,
+        context: ToolContext | None = None,
+    ) -> list[dict[str, Any]]:
         return [
             {
                 "name": name,
@@ -138,6 +142,10 @@ class ToolRegistry:
             }
             for name in profile.allowed_tools
             if name in self._tools
+            and not (
+                name == "memory_search"
+                and (context is None or context.user_id is None)
+            )
         ]
 
     async def execute(
@@ -164,6 +172,14 @@ class ToolRegistry:
                 ok=False,
                 error_code="tool_not_allowed",
                 public_error="该专家无权使用此工具",
+            )
+        if tool_name == "memory_search" and context.user_id is None:
+            return ToolObservation(
+                tool_call_id=call_id,
+                tool_name=tool_name,
+                ok=False,
+                error_code="memory_requires_user",
+                public_error="登录后才能检索个人历史决策",
             )
         tool = self._tools[tool_name]
         try:

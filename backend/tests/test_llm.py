@@ -61,7 +61,7 @@ def test_get_llm_returns_chat_model():
     llm = get_llm()
     assert llm.model_name == "glm-5"
     assert "bigmodel.cn" in str(llm.openai_api_base)
-    assert llm.request_timeout == 25.0
+    assert llm.request_timeout == 45.0
     assert llm.max_retries == 0
 
 

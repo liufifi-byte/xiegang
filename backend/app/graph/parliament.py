@@ -83,6 +83,12 @@ async def get_graph_with_checkpointer():
 
     首次调用时初始化 checkpointer + setup()。
     """
+    from app.config import get_settings
+
+    if not get_settings().langgraph_checkpointer_enabled:
+        return get_graph()
+
     from app.checkpointer import get_checkpointer
+
     checkpointer = await get_checkpointer()
     return build_parliament_graph(checkpointer=checkpointer)

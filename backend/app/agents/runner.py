@@ -9,7 +9,11 @@ from typing import Any
 from app.agents.harness import AgentBudget, AgentCancelled, AgentHarness
 from app.agents.model_adapter import DecisionAdapter, ResilientDecisionAdapter
 from app.agents.profiles import ExpertProfile
-from app.agents.research_graph import ExpertResearchGraph, _fallback_result
+from app.agents.research_graph import (
+    ExpertResearchGraph,
+    _evidence_backed_fallback,
+    _fallback_result,
+)
 from app.agents.tool_registry import ToolContext, ToolRegistry
 from app.agents.trace import AgentTraceSink
 
@@ -84,7 +88,7 @@ class ExpertResearchAgentRunner:
         except TimeoutError:
             reason = "Agent 总运行时间已达到上限"
             result = self.harness.validate_result(
-                _fallback_result(self.profile.expert_id, reason),
+                _evidence_backed_fallback(self.profile, self.harness, reason),
                 forced_reason=reason,
             )
             if (

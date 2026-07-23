@@ -29,6 +29,41 @@ def _fallback_result(agent_id: str, reason: str) -> ExpertResearchResult:
     )
 
 
+def _evidence_backed_fallback(
+    profile: ExpertProfile,
+    harness: AgentHarness,
+    reason: str,
+) -> ExpertResearchResult:
+    records = harness.ledger.records
+    evidence_refs = [record.evidence_id for record in records[:3]]
+    if records:
+        evidence_summary = "；".join(
+            record.claim_summary[:100] for record in records[:2]
+        )
+        thesis = (
+            f"已完成的调研或计算显示：{evidence_summary}。"
+            f"结合{profile.analysis_methods[0]}，这些信息仍不足以单独决定最终选择。"
+        )
+    else:
+        thesis = (
+            f"本轮未获得足够的可验证资料；应先用{profile.analysis_methods[0]}"
+            "补齐最影响结论的变量，再做最终选择。"
+        )
+    return ExpertResearchResult(
+        agent_id=profile.expert_id,
+        stance="neutral",
+        confidence=0.45 if records else 0.25,
+        thesis=thesis,
+        evidence_refs=evidence_refs,
+        assumptions=["已获得的工具结果只覆盖当前可验证信息"],
+        unknowns=[reason],
+        reversal_conditions=[profile.required_questions[0]],
+        next_actions=list(profile.required_questions[:2]),
+        degraded=True,
+        degradation_reason=reason,
+    )
+
+
 def build_reason_prompt(
     state: ExpertAgentState,
     profile: ExpertProfile,
@@ -96,7 +131,11 @@ class ExpertResearchGraph:
                 self.harness,
                 force_finish=force_finish,
             ),
-            [] if force_finish else self.harness.registry.schemas_for(self.profile),
+            []
+            if force_finish
+            else self.harness.registry.schemas_for(
+                self.profile, self.harness.context
+            ),
             force_finish=force_finish,
         )
         return {
@@ -176,7 +215,7 @@ class ExpertResearchGraph:
             )
         except Exception:
             result = self.harness.validate_result(
-                _fallback_result(self.profile.expert_id, reason),
+                _evidence_backed_fallback(self.profile, self.harness, reason),
                 forced_reason=reason,
             )
         await self.harness.complete(result)

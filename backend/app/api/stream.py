@@ -95,7 +95,7 @@ async def stream_parliament(parliament_id: str, request: Request):
 
         # 3. 轮询 events
         last_seq = 0
-        start_time = time.time()
+        start_time = time.monotonic()
         terminal_types = {"parliament_done", "cancelled", "error"}
 
         while True:
@@ -104,7 +104,7 @@ async def stream_parliament(parliament_id: str, request: Request):
                 return
 
             # 超时
-            if time.time() - start_time > MAX_WATCH_SECONDS:
+            if time.monotonic() - start_time > MAX_WATCH_SECONDS:
                 yield {
                     "event": "message",
                     "data": json.dumps(
