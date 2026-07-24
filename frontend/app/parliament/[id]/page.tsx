@@ -2,12 +2,17 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { MemberStatusBar } from "@/components/MemberStatusBar";
 import { ChatMessage } from "@/components/ChatMessage";
 import { UserBubble } from "@/components/UserBubble";
 import { SystemMessage } from "@/components/SystemMessage";
 import { ChatInput } from "@/components/ChatInput";
 import { AgentResearchTimeline } from "@/components/AgentResearchTimeline";
+import {
+  CouncilPhase,
+  CouncilPhaseBar,
+} from "@/components/council/CouncilPhaseBar";
+import { ExpertSeatPanel } from "@/components/council/ExpertSeatPanel";
+import { getParliament } from "@/lib/api";
 import { subscribeParliament } from "@/lib/sse";
 import {
   AgentTraceEvent,
@@ -60,6 +65,47 @@ export default function ParliamentPage() {
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [mergedTranscript.length]);
+
+  useEffect(() => {
+    if (!parliamentId) return;
+    let active = true;
+    getParliament(parliamentId)
+      .then((snapshot) => {
+        if (!active) return;
+        setTopic(snapshot.topic || "");
+        setTranscript(snapshot.transcript || []);
+        setToolCalls(snapshot.tool_calls || []);
+        setAgentTraces(snapshot.agent_traces || []);
+        const ids = (snapshot.selected_expert_ids || []) as MemberId[];
+        setSelectedExpertIds(ids);
+        const snapshotMembers = snapshot.members_state || {};
+        setMemberStatus(
+          Object.fromEntries(
+            ids.map((id) => [
+              id,
+              snapshotMembers[id]?.degraded
+                ? "degraded"
+                : snapshotMembers[id]
+                ? "done"
+                : "idle",
+            ])
+          ) as Partial<Record<MemberId, MemberStatus>>
+        );
+        if (snapshot.status === "done") setStatus("done");
+        else if (snapshot.status === "failed" || snapshot.status === "cancelled") {
+          setStatus("error");
+          setErrorMsg(
+            snapshot.status === "cancelled" ? "议会已被取消" : "议会运行失败"
+          );
+        } else if (snapshot.status === "running") setStatus("running");
+      })
+      .catch(() => {
+        // SSE remains the live fallback.
+      });
+    return () => {
+      active = false;
+    };
+  }, [parliamentId]);
 
   // === SSE 订阅 ===
   useEffect(() => {
@@ -176,7 +222,10 @@ export default function ParliamentPage() {
             setCurrentRound(payload.current_round);
 
             // 阶段切换：从调研(R0)进入 R1 → 系统消息
-            if (node === "debate" && payload.current_round > prevRound) {
+            if (
+              (node === "debate" || node === "cross_examination") &&
+              payload.current_round > prevRound
+            ) {
               setMemberStatus((prev) =>
                 Object.fromEntries(
                   Object.keys(prev).map((id) => [id, "speaking"])
@@ -273,6 +322,25 @@ export default function ParliamentPage() {
     [memberStatus]
   );
 
+  const phase: CouncilPhase = useMemo(() => {
+    if (summary) return "summary";
+    if (currentRound > 0) return "debate";
+    if (
+      agentTraces.length > 0 ||
+      Object.values(memberStatus).some((value) => value !== "idle")
+    ) {
+      return "research";
+    }
+    return "understanding";
+  }, [agentTraces.length, currentRound, memberStatus, summary]);
+
+  const phaseTitle = {
+    understanding: "正在理解你的问题",
+    research: "专家正在形成第一轮判断",
+    debate: "三位专家正在交叉回应",
+    summary: "主席正在整理议会结论",
+  }[phase];
+
   // 完成时跳转到独立 summary 路由
   // V1-S1.1 修复 #1：之前内联渲染 SummaryPanel，刷新就丢
   // V1-S3: 用户插话已通过 interrupt API 真入 runtime_context，会随 debate 写入 transcript，
@@ -300,57 +368,101 @@ export default function ParliamentPage() {
   }
 
   return (
-    <main className="min-h-screen flex flex-col">
-      {/* 深苔绿顶栏（压舱色） */}
-      <header className="bg-parliament text-white">
-        <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
-          <button
-            onClick={() => router.push("/")}
-            className="text-sm text-white/70 hover:text-white transition flex items-center gap-1"
-          >
-            ← 返回
-          </button>
-          <div className="text-sm font-medium truncate max-w-[50%] text-center">
-            邪杠 · {topic || "议会中"}
-          </div>
-          {/* V1-S4: 取消按钮（议会进行中可见） */}
-          {status === "connecting" || status === "running" ? (
-            <button
-              onClick={handleCancel}
-              className="text-xs px-3 py-1 rounded bg-stance-againstText/80 hover:bg-stance-againstText text-white transition"
-              title="结束议会，下个节点完成后停止"
-            >
-              ⏹ 结束
-            </button>
-          ) : (
-            <div className="text-xs text-white/70">
-              {status === "error" ? "出错" : "完成"}
-            </div>
-          )}
+    <main className="grid h-screen min-h-[640px] grid-cols-[58px_minmax(0,1fr)] overflow-hidden bg-[#f5f3f1] text-[#2d2830] md:grid-cols-[64px_190px_minmax(0,1fr)] lg:grid-cols-[72px_220px_minmax(420px,1fr)_210px]">
+      <aside className="flex flex-col items-center gap-4 bg-[#29212d] px-2 py-5">
+        <img
+          src="/brand/xiegang-logo.png"
+          alt="斜杠"
+          className="h-8 w-12 object-cover object-center brightness-[1.7] saturate-75 mix-blend-screen"
+        />
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-[#493351] text-xl text-white">
+          ◌
+        </span>
+        <button
+          type="button"
+          onClick={() => router.push("/")}
+          className="grid h-10 w-10 place-items-center rounded-xl text-2xl text-[#cec7d0] transition hover:bg-[#493351] hover:text-white"
+          aria-label="返回首页"
+        >
+          ‹
+        </button>
+      </aside>
+
+      <aside className="hidden border-r border-[#e0dce0] bg-[#eeeceb] px-3 py-6 md:block">
+        <p className="text-[11px] font-extrabold tracking-[0.12em] text-[#ec403d]">
+          正在讨论
+        </p>
+        <div className="mt-4 flex items-center gap-2 rounded-xl bg-white p-3">
+          <span className="grid h-9 w-9 place-items-center rounded-[10px] bg-gradient-to-br from-[#5a246b] to-[#e34a47] text-xs font-extrabold text-white">
+            杠
+          </span>
+          <span className="min-w-0">
+            <strong className="block truncate text-xs">本次议会</strong>
+            <small className="mt-1 block text-[11px] text-[#88808a]">
+              {selectedExpertIds.length || 5} 位专家
+            </small>
+          </span>
         </div>
-        <div className="h-px gold-divider" />
-      </header>
+        <div className="mt-6 rounded-xl border border-[#e2d9dc] bg-white/55 p-3">
+          <p className="text-[11px] text-[#8b838b]">当前阶段</p>
+          <p className="mt-1 text-sm font-bold text-[#4b1c62]">{phaseTitle}</p>
+        </div>
+        <p className="mx-1 mt-6 text-xs leading-6 text-[#8b838b]">
+          你可以随时补充背景、追问某位专家，或结束本次会议。
+        </p>
+      </aside>
 
-      {/* 议员状态条 */}
-      <MemberStatusBar
-        expertIds={selectedExpertIds}
-        memberStatus={memberStatus}
-        currentRound={currentRound}
-        maxRound={3}
-        doneCount={doneCount}
-        activeMember={activeMember}
-        onMemberClick={(id) =>
-          setActiveMember((cur) => (cur === id ? null : id))
-        }
-      />
+      <section className="grid min-w-0 grid-rows-[auto_auto_auto_minmax(0,1fr)_auto] bg-[#f8f7f6]">
+        <header className="flex items-center justify-between border-b border-[#e8e3e5] bg-white px-4 py-3.5 sm:px-7">
+          <div className="min-w-0">
+            <p className="text-[10px] font-extrabold tracking-[0.12em] text-[#ec403d]">
+              第三步 · 专家议会
+            </p>
+            <h1 className="mt-1 truncate text-base font-bold text-[#2d2830] sm:text-lg">
+              {phaseTitle}
+            </h1>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => selectedExpertIds[0] && setActiveMember(selectedExpertIds[0])}
+              className="hidden text-xs font-bold text-[#b34b58] sm:block"
+            >
+              查看专家
+            </button>
+            {status === "connecting" || status === "running" ? (
+              <button
+                onClick={handleCancel}
+                className="rounded-lg bg-[#fff0ed] px-3 py-2 text-xs font-bold text-[#a44343] transition hover:bg-[#f9ded9]"
+              >
+                叫停
+              </button>
+            ) : (
+              <span className="text-xs text-[#978994]">
+                {status === "error" ? "已停止" : "已完成"}
+              </span>
+            )}
+          </div>
+        </header>
 
-      {/* 群聊主区 */}
-      <div className="flex-1 overflow-hidden bg-bg-chat">
-        <div className="max-w-3xl mx-auto py-4">
-          {/* 系统消息：你已加入会议室 */}
-          <SystemMessage
-            text={`你已加入「${topic || "议会"}」会议室`}
-          />
+        <CouncilPhaseBar phase={phase} />
+        <ExpertSeatPanel
+          compact
+          expertIds={selectedExpertIds}
+          statuses={memberStatus}
+          activeMember={activeMember}
+          onSelect={(id) => setActiveMember(id)}
+        />
+
+        <div className="flex items-start gap-3 border-b border-[#e8e3e5] bg-[#fcfbfa] px-4 py-2.5 text-xs text-[#655d66] sm:px-7">
+          <span className="rounded bg-[#fff0ed] px-2 py-1 text-[10px] font-bold text-[#9c5550]">
+            议题
+          </span>
+          <p className="line-clamp-2 leading-5">{topic || "正在读取议题…"}</p>
+        </div>
+
+        <div className="overflow-y-auto px-0 py-4 sm:px-4">
+          <SystemMessage text={`你已加入「${topic || "本次议会"}」`} />
 
           <AgentResearchTimeline
             traces={agentTraces}
@@ -358,50 +470,49 @@ export default function ParliamentPage() {
             activeMember={activeMember}
           />
 
-          {/* connecting */}
           {status === "connecting" && (
-            <div className="text-center py-8 text-ink-3">
-              <div className="inline-block w-5 h-5 border-2 border-edge border-t-brand rounded-full animate-spin mb-2" />
-              <div className="text-xs">正在组建本场专家议会...</div>
+            <div className="mx-4 my-4 rounded-xl border border-[#eadfd9] bg-[#fffaf6] px-4 py-3 text-xs leading-5 text-[#71666e]">
+              <strong className="text-[#4b1c62]">
+                {selectedExpertIds.length
+                  ? `${selectedExpertIds.length} 位专家已入席`
+                  : "正在读取专家席"}
+              </strong>
+              <span className="ml-2">正在等待分析流程开始，请稍候…</span>
             </div>
           )}
 
-          {/* 消息列表 */}
-          {mergedTranscript.length > 0 && (
-            <div className="space-y-1">
-              {mergedTranscript.map((entry, i) => {
-                if (entry.speaker === "user") {
-                  return <UserBubble key={`u-${i}`} entry={entry} />;
-                }
-                if (
-                  entry.speaker === "system" ||
-                  entry.type === "election"
-                ) {
-                  return (
-                    <SystemMessage key={`s-${i}`} text={entry.content} />
-                  );
-                }
-                return <ChatMessage key={`m-${i}`} entry={entry} />;
-              })}
-              <div ref={transcriptEndRef} />
-            </div>
-          )}
+          {mergedTranscript.map((entry, i) => {
+            if (entry.speaker === "user") {
+              return <UserBubble key={`u-${i}`} entry={entry} />;
+            }
+            if (entry.speaker === "system" || entry.type === "election") {
+              return <SystemMessage key={`s-${i}`} text={entry.content} />;
+            }
+            return <ChatMessage key={`m-${i}`} entry={entry} />;
+          })}
+          <div ref={transcriptEndRef} />
 
-          {/* 错误 */}
           {status === "error" && (
-            <div className="mx-4 my-6 p-4 bg-stance-againstBg border border-stance-againstText/30 rounded-md text-stance-againstText text-sm">
-              <strong>议会出错：</strong>
+            <div className="mx-4 my-6 rounded-xl border border-[#ec403d]/30 bg-[#fff0ed] p-4 text-sm text-[#a43b38]">
+              <strong>会议已停止：</strong>
               {errorMsg}
-              <button
-                onClick={() => router.push("/")}
-                className="ml-3 underline hover:opacity-70"
-              >
-                返回首页
-              </button>
             </div>
           )}
         </div>
-      </div>
+
+        <ChatInput
+          onSubmit={handleUserSubmit}
+          disabled={status === "error"}
+          placeholder="补充背景、追问某位专家，或调整讨论方向…"
+        />
+      </section>
+
+      <ExpertSeatPanel
+        expertIds={selectedExpertIds}
+        statuses={memberStatus}
+        activeMember={activeMember}
+        onSelect={(id) => setActiveMember(id)}
+      />
 
       {/* 右侧议员详情抽屉 */}
       {activeMemberData?.member && (
@@ -420,11 +531,6 @@ export default function ParliamentPage() {
         />
       )}
 
-      {/* 底部插话输入 */}
-      <ChatInput
-        onSubmit={handleUserSubmit}
-        disabled={status === "error"}
-      />
     </main>
   );
 }
