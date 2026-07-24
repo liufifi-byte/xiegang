@@ -53,6 +53,10 @@ export default function ParliamentPage() {
   const [userMessages, setUserMessages] = useState<TranscriptEntry[]>([]);
 
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
+  const transcriptScrollRef = useRef<HTMLDivElement | null>(null);
+  const autoFollowRef = useRef(true);
+  const initialScrollDoneRef = useRef(false);
+  const [hasNewMessages, setHasNewMessages] = useState(false);
 
   // 合并 transcript：
   //   开场白（"开始调研"）—— 在议员**还没拿到研究结果**时显示
@@ -63,10 +67,41 @@ export default function ParliamentPage() {
     [transcript, userMessages]
   );
 
-  // 自动滚到底
+  // 初次进入定位最新消息；用户向上阅读后不再抢夺滚动位置。
   useEffect(() => {
-    transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [mergedTranscript.length]);
+    const container = transcriptScrollRef.current;
+    if (!container) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (!initialScrollDoneRef.current) {
+        container.scrollTop = container.scrollHeight;
+        initialScrollDoneRef.current = true;
+        return;
+      }
+      if (autoFollowRef.current) {
+        container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+      } else {
+        setHasNewMessages(true);
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [agentTraces.length, mergedTranscript.length]);
+
+  const handleTranscriptScroll = () => {
+    const container = transcriptScrollRef.current;
+    if (!container) return;
+    const nearBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight < 96;
+    autoFollowRef.current = nearBottom;
+    if (nearBottom) setHasNewMessages(false);
+  };
+
+  const jumpToLatest = () => {
+    const container = transcriptScrollRef.current;
+    if (!container) return;
+    autoFollowRef.current = true;
+    setHasNewMessages(false);
+    container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+  };
 
   useEffect(() => {
     if (!parliamentId) return;
@@ -432,7 +467,7 @@ export default function ParliamentPage() {
   }
 
   return (
-    <main className="grid h-screen min-h-[640px] grid-cols-[58px_minmax(0,1fr)] overflow-hidden bg-[#f5f3f1] text-[#2d2830] md:grid-cols-[64px_190px_minmax(0,1fr)] lg:grid-cols-[72px_220px_minmax(420px,1fr)_210px]">
+    <main className="grid h-dvh min-h-0 grid-cols-[58px_minmax(0,1fr)] overflow-hidden bg-[#f5f3f1] text-[#2d2830] md:grid-cols-[64px_190px_minmax(0,1fr)] lg:grid-cols-[72px_220px_minmax(420px,1fr)_210px]">
       <aside className="flex flex-col items-center gap-4 bg-[#29212d] px-2 py-5">
         <img
           src="/brand/xiegang-logo.png"
@@ -489,7 +524,7 @@ export default function ParliamentPage() {
         </p>
       </aside>
 
-      <section className="grid min-w-0 grid-rows-[auto_auto_auto_minmax(0,1fr)_auto] bg-[#f8f7f6]">
+      <section className="grid min-h-0 min-w-0 grid-rows-[auto_auto_auto_minmax(0,1fr)_auto] overflow-hidden bg-[#f8f7f6]">
         <header className="flex items-center justify-between border-b border-[#e8e3e5] bg-white px-4 py-3.5 sm:px-7">
           <div className="min-w-0">
             <p className="text-[10px] font-extrabold tracking-[0.12em] text-[#ec403d]">
@@ -538,7 +573,12 @@ export default function ParliamentPage() {
           <p className="line-clamp-2 leading-5">{topic || "正在读取议题…"}</p>
         </div>
 
-        <div className="overflow-y-auto px-0 py-4 sm:px-4">
+        <div className="relative min-h-0 overflow-hidden">
+        <div
+          ref={transcriptScrollRef}
+          onScroll={handleTranscriptScroll}
+          className="h-full min-h-0 overflow-y-auto overscroll-contain px-0 py-4 sm:px-4"
+        >
           <SystemMessage text={`你已加入「${topic || "本次议会"}」`} />
 
           <AgentResearchTimeline
@@ -582,6 +622,16 @@ export default function ParliamentPage() {
               {errorMsg}
             </div>
           )}
+        </div>
+        {hasNewMessages && (
+          <button
+            type="button"
+            onClick={jumpToLatest}
+            className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full bg-[#4b1c62] px-4 py-2 text-xs font-bold text-white shadow-lg transition hover:bg-[#623078]"
+          >
+            有新消息 ↓
+          </button>
+        )}
         </div>
 
         <ChatInput

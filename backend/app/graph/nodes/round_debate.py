@@ -225,16 +225,17 @@ async def run_debate_round(state: dict) -> dict:
             })
         else:
             err = outcome["error"]
-            err_str = f"{type(err).__name__}: {err}" if err else "Unknown error"
             speaker = outcome.get("speaker", "?")
+            speaker_name = member_info.get(speaker, ("该专家", ""))[0]
             new_entries.append({
-                "speaker": speaker,
+                "speaker": "system",
                 "round": next_round,
                 "type": "debate_error",
                 "stance": "neutral",
-                "content": f"[DEBATE ERROR] {err_str}",
+                "content": f"{speaker_name}本轮未及时回应，会议继续进行。",
                 "evidence": [],
                 "confidence": 0.0,
+                "failed_speaker": speaker,
             })
             tool_calls_log.append({
                 "member": speaker,
@@ -251,7 +252,9 @@ async def run_debate_round(state: dict) -> dict:
 
     new_members_state = dict(initial_stances)
     for entry in new_entries:
-        new_members_state[entry["speaker"]] = entry
+        member_id = entry.get("failed_speaker") or entry["speaker"]
+        if member_id != "system":
+            new_members_state[member_id] = entry
 
     return {
         "transcript": new_transcript + new_entries,
