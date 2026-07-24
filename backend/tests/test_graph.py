@@ -33,3 +33,13 @@ def test_graph_has_6_nodes():
     assert should_continue_debate({"current_round": 0, "max_rounds": 3}) == "debate"
     assert should_continue_debate({"current_round": 2, "max_rounds": 3}) == "debate"
     assert should_continue_debate({"current_round": 3, "max_rounds": 3}) == "election"
+
+
+def test_graph_uses_single_bounded_cross_examination():
+    graph = build_parliament_graph()
+    nodes = set(graph.get_graph().nodes)
+    assert "select_divergent" in nodes
+    assert "cross_examination" in nodes
+    assert "select_chair" in nodes
+    assert "debate" not in nodes
+    assert "election" not in nodes

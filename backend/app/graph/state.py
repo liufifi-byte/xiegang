@@ -20,6 +20,7 @@ class ParliamentState(TypedDict):
     selected_expert_ids: list[str]
     expert_selection_reasons: dict[str, str]
     debate_duties: dict[str, str]
+    divergent_expert_ids: list[str]
     agent_results: dict[str, dict]
     agent_traces: list[dict]
     research_degraded: bool
@@ -68,6 +69,7 @@ def make_initial_state(
         "selected_expert_ids": list(selected_expert_ids or []),
         "expert_selection_reasons": {},
         "debate_duties": {},
+        "divergent_expert_ids": [],
         "agent_results": {},
         "agent_traces": [],
         "research_degraded": False,

@@ -19,6 +19,7 @@
 并发控制：asyncio.Semaphore(N) 单进程同时跑 N 场议会。
 """
 import asyncio
+import contextlib
 import logging
 import re
 import time
@@ -41,6 +42,25 @@ logger = logging.getLogger(__name__)
 
 # 单进程同时跑几场议会
 _MAX_CONCURRENT = 2
+
+
+async def _cancel_when_requested(
+    parliament_id: str,
+    target_task: asyncio.Task,
+    *,
+    poll_seconds: float = 1.0,
+) -> None:
+    """Bridge the DB cancel flag into the separate worker process."""
+    while not target_task.done():
+        await asyncio.sleep(poll_seconds)
+        try:
+            if await is_cancelled(parliament_id):
+                target_task.cancel()
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("议会 %s 取消状态检查失败: %s", parliament_id, exc)
 
 
 def _clean_db_url() -> str:
@@ -177,6 +197,14 @@ async def run_one_parliament(task: dict) -> None:
     # 标 parliament_runtime 为 running
     await get_or_create_context(parliament_id)
     await mark_running(parliament_id)
+    current_task = asyncio.current_task()
+    cancel_watcher = (
+        asyncio.create_task(
+            _cancel_when_requested(parliament_id, current_task)
+        )
+        if current_task is not None
+        else None
+    )
 
     start_ts = time.monotonic()
     terminated_early = False
@@ -245,14 +273,27 @@ async def run_one_parliament(task: dict) -> None:
             logger.info("议会 %s 完成", parliament_id)
 
     except asyncio.CancelledError:
-        logger.warning("议会 %s 被中断", parliament_id)
-        _append_event_safe(
-            parliament_id, "error", {"error": "worker interrupted"}
-        )
-        await _mark_terminal_status(
-            parliament_id, "failed", "worker_interrupted"
-        )
-        raise
+        requested = False
+        try:
+            requested = await is_cancelled(parliament_id)
+        except Exception:
+            pass
+        if requested:
+            logger.info("议会 %s 已响应用户取消", parliament_id)
+            _append_event_safe(parliament_id, "cancelled", {})
+            await _mark_terminal_status(
+                parliament_id, "cancelled", "cancelled_by_user"
+            )
+            terminated_early = True
+        else:
+            logger.warning("议会 %s 被工作进程中断", parliament_id)
+            _append_event_safe(
+                parliament_id, "error", {"error": "worker interrupted"}
+            )
+            await _mark_terminal_status(
+                parliament_id, "failed", "worker_interrupted"
+            )
+            raise
     except Exception as e:
         logger.exception("议会 %s 执行失败: %s", parliament_id, e)
         _append_event_safe(parliament_id, "error", {
@@ -264,6 +305,10 @@ async def run_one_parliament(task: dict) -> None:
             f"{type(e).__name__}: {e}",
         )
     finally:
+        if cancel_watcher is not None:
+            cancel_watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cancel_watcher
         await mark_finished(parliament_id)
 
 

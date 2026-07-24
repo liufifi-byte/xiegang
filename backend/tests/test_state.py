@@ -14,6 +14,7 @@ def test_make_initial_state_has_all_fields():
         "parliament_id", "started_at",
         "selected_expert_ids", "expert_selection_reasons",
         "debate_duties",
+        "divergent_expert_ids",
         "agent_results", "agent_traces",
         "research_degraded", "research_error",
     }
