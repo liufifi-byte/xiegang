@@ -16,6 +16,13 @@ export interface CreateParliamentResponse {
   device_id?: string;
 }
 
+export interface ExpertSelectionPreviewResponse {
+  recommended_expert_ids: string[];
+  coverage: string[];
+  reasons: Record<string, string>;
+  selection_source: "category_rule" | "topic_rule" | string;
+}
+
 export class RateLimitError extends Error {
   retryAfter: number;
   constructor(message: string, retryAfter: number) {
@@ -29,7 +36,8 @@ export async function createParliament(
   topic: string,
   topicCategory?: string,
   userBackground?: string,
-  userId?: string
+  userId?: string,
+  selectedExpertIds?: string[]
 ): Promise<CreateParliamentResponse> {
   const res = await fetch(`${API_BASE}/parliament`, {
     method: "POST",
@@ -39,6 +47,7 @@ export async function createParliament(
       topic_category: topicCategory || null,
       user_background: userBackground || null,
       user_id: userId || null,
+      selected_expert_ids: selectedExpertIds || null,
     }),
   });
   if (res.status === 429) {
@@ -51,6 +60,27 @@ export async function createParliament(
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`createParliament ${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
+export async function previewExpertSelection(
+  topic: string,
+  topicCategory?: string,
+  userBackground?: string
+): Promise<ExpertSelectionPreviewResponse> {
+  const res = await fetch(`${API_BASE}/expert-selection/preview`, {
+    method: "POST",
+    headers: buildHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      topic,
+      topic_category: topicCategory || null,
+      user_background: userBackground || null,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`previewExpertSelection ${res.status}: ${text}`);
   }
   return res.json();
 }
