@@ -132,3 +132,35 @@ export async function listParliaments() {
   if (!res.ok) throw new Error(`listParliaments ${res.status}`);
   return res.json();
 }
+
+export async function heartbeatParliament(
+  parliamentId: string,
+  keepRunning = false
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/parliament/${parliamentId}/heartbeat`, {
+    method: "POST",
+    headers: buildHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ keep_running: keepRunning }),
+  });
+  if (!res.ok) throw new Error(`heartbeatParliament ${res.status}`);
+  return res.json();
+}
+
+export interface CurrentParliament {
+  id: string;
+  topic: string;
+  status: "queued" | "running" | "done";
+  current_phase?: string;
+  created_at: string;
+  members_state?: Record<string, unknown>;
+}
+
+export async function getCurrentParliament(): Promise<CurrentParliament | null> {
+  const res = await fetch(`${API_BASE}/parliament/active/current`, {
+    headers: buildHeaders(),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`getCurrentParliament ${res.status}`);
+  const data = await res.json();
+  return data.item || null;
+}

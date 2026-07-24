@@ -1,10 +1,13 @@
 """议会 HTTP API。"""
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.config import get_settings
 from app.db import get_supabase
+from app.event_store import fetch_events_since
 from app.middleware.rate_limit import (
     _check_and_record,
     _get_client_ip,
@@ -22,6 +25,29 @@ router = APIRouter(prefix="/api/parliament", tags=["parliament"])
 class InterruptRequest(BaseModel):
     """用户插话请求体。"""
     content: str
+
+
+class HeartbeatRequest(BaseModel):
+    """The page is still attached to this council."""
+
+    keep_running: bool = False
+
+
+def _worker_available() -> bool:
+    """A worker is available when it has checked in during the last 15 seconds."""
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=15)).isoformat()
+        result = (
+            get_supabase()
+            .table("worker_heartbeats")
+            .select("worker_id")
+            .gte("last_seen_at", cutoff)
+            .limit(1)
+            .execute()
+        )
+        return bool(result.data)
+    except Exception:
+        return False
 
 
 @router.post("")
@@ -62,6 +88,8 @@ async def create_parliament(req: CreateParliamentRequest, request: Request) -> d
         "transcript": [],
         "tool_calls": [],
         "selected_expert_ids": req.selected_expert_ids,
+        "current_phase": "queued",
+        "last_client_heartbeat": datetime.now(timezone.utc).isoformat(),
     }
     result = supabase.table("parliaments").insert(row).execute()
 
@@ -124,6 +152,56 @@ async def cancel_parliament(parliament_id: str) -> dict:
     }
 
 
+@router.post("/{parliament_id}/heartbeat")
+async def heartbeat_parliament(
+    parliament_id: str,
+    req: HeartbeatRequest,
+    request: Request,
+) -> dict:
+    """Renew the client lease; returning home can explicitly keep it alive."""
+    now = datetime.now(timezone.utc)
+    payload = {
+        "last_client_heartbeat": now.isoformat(),
+        "keep_alive_until": (
+            (now + timedelta(minutes=30)).isoformat()
+            if req.keep_running
+            else None
+        ),
+    }
+    query = (
+        get_supabase()
+        .table("parliaments")
+        .update(payload)
+        .eq("id", parliament_id)
+    )
+    device_id = _get_device_id(request)
+    if device_id:
+        query = query.eq("device_id", device_id)
+    result = query.execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="议会不存在或无权访问")
+    return {"ok": True, "server_time": now.isoformat()}
+
+
+@router.get("/active/current")
+async def get_current_parliament(request: Request) -> dict:
+    """Return the latest recoverable council for this anonymous device."""
+    device_id = _get_device_id(request)
+    if not device_id:
+        return {"item": None}
+    result = (
+        get_supabase()
+        .table("parliaments")
+        .select("id,topic,status,current_phase,created_at,summary,members_state")
+        .eq("device_id", device_id)
+        .in_("status", ["queued", "running", "done"])
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return {"item": result.data[0] if result.data else None}
+
+
 @router.get("/{parliament_id}")
 async def get_parliament(parliament_id: str) -> ParliamentResponse:
     """获取议会状态（含 transcript / summary 等）。"""
@@ -142,6 +220,15 @@ async def get_parliament(parliament_id: str) -> ParliamentResponse:
     data = result.data
     summary = data.get("summary") or {}
     tool_calls = data.get("tool_calls", [])
+    try:
+        stored_events = fetch_events_since(parliament_id, 0, limit=500)
+        stored_traces = [
+            {"seq": event["seq"], **(event.get("payload") or {})}
+            for event in stored_events
+            if event.get("event_type") == "agent_trace"
+        ]
+    except Exception:
+        stored_traces = []
     return ParliamentResponse(
         id=data["id"],
         topic=data["topic"],
@@ -157,11 +244,14 @@ async def get_parliament(parliament_id: str) -> ParliamentResponse:
             or summary.get("selected_expert_ids", [])
         ),
         agent_results=summary.get("agent_results", {}),
-        agent_traces=[
+        agent_traces=stored_traces or [
             item["trace"]
             for item in tool_calls
             if item.get("action") == "agent_trace" and isinstance(item.get("trace"), dict)
         ],
+        current_phase=data.get("current_phase") or data.get("status") or "queued",
+        worker_available=_worker_available(),
+        completed_expert_count=len(data.get("members_state") or {}),
     )
 
 

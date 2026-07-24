@@ -3,7 +3,9 @@
   "private": true,
   "workspaces": ["frontend"],
   "scripts": {
+    "dev": "./scripts/dev.sh",
     "dev:backend": "cd backend && uvicorn app.main:app --reload --port 8001 --host 127.0.0.1",
+    "dev:worker": "cd backend && ./.venv/bin/python -m app.worker",
     "dev:frontend": "cd frontend && pnpm dev -- -p 3001"
   }
 }

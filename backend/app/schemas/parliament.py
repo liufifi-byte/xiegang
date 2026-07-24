@@ -45,3 +45,6 @@ class ParliamentResponse(BaseModel):
     selected_expert_ids: list[str] = Field(default_factory=list)
     agent_results: dict[str, Any] = Field(default_factory=dict)
     agent_traces: list[dict[str, Any]] = Field(default_factory=list)
+    current_phase: str = "queued"
+    worker_available: bool = False
+    completed_expert_count: int = 0

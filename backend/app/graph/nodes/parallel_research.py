@@ -408,13 +408,6 @@ async def _parallel_agent_research(state: dict) -> dict:
             # Agent still runs; outer worker and trace store remain the fallback.
             checkpointer = None
 
-    outcomes = await asyncio.gather(
-        *[
-            _run_one_expert_safe(expert_id, state, registry, checkpointer)
-            for expert_id in selected
-        ]
-    )
-
     members: dict[str, dict] = {}
     agent_results: dict[str, dict] = {}
     trace_events: list[dict] = list(state.get("agent_traces", []))
@@ -422,7 +415,14 @@ async def _parallel_agent_research(state: dict) -> dict:
     research_entries: list[dict] = []
     successes = 0
 
-    for outcome in outcomes:
+    tasks = [
+        asyncio.create_task(
+            _run_one_expert_safe(expert_id, state, registry, checkpointer)
+        )
+        for expert_id in selected
+    ]
+    for completed in asyncio.as_completed(tasks):
+        outcome = await completed
         expert_id = outcome["expert_id"]
         if outcome["ok"]:
             successes += 1
@@ -471,6 +471,46 @@ async def _parallel_agent_research(state: dict) -> dict:
                 "degraded": member.get("degraded", False),
             }
         )
+        # Persist and publish each result immediately. The graph node can keep
+        # waiting for slower experts without hiding completed work from users.
+        parliament_id = state.get("parliament_id")
+        if parliament_id:
+            partial_transcript = state.get("transcript", []) + research_entries
+            try:
+                from app.db import get_supabase
+                from app.event_store import append_event
+
+                await asyncio.to_thread(
+                    lambda: (
+                        get_supabase()
+                        .table("parliaments")
+                        .update(
+                            {
+                                "members_state": members,
+                                "transcript": partial_transcript,
+                                "current_phase": "researching",
+                            }
+                        )
+                        .eq("id", parliament_id)
+                        .execute()
+                    )
+                )
+                await asyncio.to_thread(
+                    append_event,
+                    parliament_id,
+                    "expert_completed",
+                    {
+                        "expert_id": expert_id,
+                        "member": member,
+                        "entry": research_entries[-1],
+                        "completed_count": len(members),
+                        "total_count": len(selected),
+                    },
+                )
+            except Exception:
+                # Incremental UI is best effort; the final node snapshot remains
+                # the durable fallback.
+                pass
 
     insufficient = successes < 3
     return {

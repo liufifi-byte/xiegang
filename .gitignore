@@ -8,6 +8,8 @@ __pycache__/
 .venv/
 dist/
 .next/
+.next-dev/
+.next.stale-preview-cache/
 out/
 .pytest_cache/
 .mypy_cache/

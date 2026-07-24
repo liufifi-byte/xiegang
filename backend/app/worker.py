@@ -23,11 +23,13 @@ import contextlib
 import logging
 import re
 import time
+import uuid
 from datetime import datetime, timezone
 
 import psycopg
 
 from app.config import get_settings
+from app.db import get_supabase
 from app.event_store import append_event
 from app.graph.parliament import get_graph_with_checkpointer
 from app.graph.state import make_initial_state
@@ -36,12 +38,14 @@ from app.runtime_context import (
     is_cancelled,
     mark_finished,
     mark_running,
+    request_cancel,
 )
 
 logger = logging.getLogger(__name__)
 
 # 单进程同时跑几场议会
 _MAX_CONCURRENT = 2
+_WORKER_ID = f"worker-{uuid.uuid4().hex[:10]}"
 
 
 async def _cancel_when_requested(
@@ -65,6 +69,78 @@ async def _cancel_when_requested(
 
 def _clean_db_url() -> str:
     return re.sub(r"\?.*$", "", get_settings().supabase_db_url)
+
+
+async def _update_worker_heartbeat(active_count: int) -> None:
+    """Publish liveness so queued users never stare at an ambiguous spinner."""
+    def update() -> None:
+        with psycopg.connect(_clean_db_url(), connect_timeout=30) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO worker_heartbeats
+                        (worker_id, last_seen_at, capacity, active_count)
+                    VALUES (%s, now(), %s, %s)
+                    ON CONFLICT (worker_id) DO UPDATE
+                    SET last_seen_at = now(),
+                        capacity = excluded.capacity,
+                        active_count = excluded.active_count
+                    """,
+                    (_WORKER_ID, _MAX_CONCURRENT, active_count),
+                )
+            conn.commit()
+    try:
+        await asyncio.to_thread(update)
+    except Exception as exc:
+        logger.warning("worker heartbeat 写入失败: %s", exc)
+
+
+async def _set_phase(parliament_id: str, phase: str) -> None:
+    def update() -> None:
+        (
+            get_supabase()
+            .table("parliaments")
+            .update({"current_phase": phase})
+            .eq("id", parliament_id)
+            .execute()
+        )
+    try:
+        await asyncio.to_thread(update)
+    except Exception as exc:
+        logger.warning("议会 %s 阶段写入失败: %s", parliament_id, exc)
+
+
+async def _cancel_abandoned_councils() -> int:
+    """Cancel councils whose browser lease expired, with refresh grace."""
+    def find() -> list[str]:
+        with psycopg.connect(_clean_db_url(), connect_timeout=30) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id
+                    FROM parliaments
+                    WHERE status IN ('queued', 'running')
+                      AND last_client_heartbeat IS NOT NULL
+                      AND last_client_heartbeat < now() - interval '20 seconds'
+                      AND (
+                        keep_alive_until IS NULL
+                        OR keep_alive_until < now()
+                      )
+                    """
+                )
+                return [str(row[0]) for row in cur.fetchall()]
+
+    ids = await asyncio.to_thread(find)
+    for parliament_id in ids:
+        await get_or_create_context(parliament_id)
+        await request_cancel(parliament_id)
+        await _mark_terminal_status(
+            parliament_id, "cancelled", "client_lease_expired"
+        )
+        _append_event_safe(
+            parliament_id, "cancelled", {"reason": "client_lease_expired"}
+        )
+    return len(ids)
 
 
 async def fetch_next_queued_parliament() -> dict | None:
@@ -104,7 +180,9 @@ async def fetch_next_queued_parliament() -> dict | None:
                 task = dict(zip(cols, row))
                 cur.execute(
                     """UPDATE parliaments
-                       SET status = 'running', started_at = now()
+                       SET status = 'running',
+                           current_phase = 'claimed',
+                           started_at = now()
                        WHERE id = %s""",
                     (task["id"],),
                 )
@@ -167,6 +245,7 @@ async def _mark_terminal_status(
 
         payload = {
             "status": status,
+            "current_phase": status,
             "finished_at": datetime.now(timezone.utc).isoformat(),
             "error_message": error_message[:500] if error_message else None,
         }
@@ -212,6 +291,7 @@ async def run_one_parliament(task: dict) -> None:
         "topic": task["topic"],
         "category": task.get("topic_category"),
     })
+    await _set_phase(parliament_id, "claimed")
 
     try:
         graph = await get_graph_with_checkpointer()
@@ -259,6 +339,18 @@ async def run_one_parliament(task: dict) -> None:
 
             # 推送 node_complete
             for node_name, state_update in event.items():
+                phase_by_node = {
+                    "parse_topic": "claimed",
+                    "select_experts": "researching",
+                    "research": "researching",
+                    "select_divergent": "cross_examining",
+                    "cross_examination": "cross_examining",
+                    "select_chair": "summarizing",
+                    "summary": "summarizing",
+                    "archive": "done",
+                }
+                if node_name in phase_by_node:
+                    await _set_phase(parliament_id, phase_by_node[node_name])
                 try:
                     payload = _safe_serialize(state_update)
                 except Exception:
@@ -354,12 +446,19 @@ async def worker_loop() -> None:
     running_tasks: set[asyncio.Task] = set()
 
     logger.info("Worker 启动，并发上限 %d", _MAX_CONCURRENT)
+    last_lease_sweep = 0.0
 
     while True:
         try:
             # 清理已完成的子 task
             done = {t for t in running_tasks if t.done()}
             running_tasks -= done
+            await _update_worker_heartbeat(len(running_tasks))
+            if time.monotonic() - last_lease_sweep >= 5:
+                cancelled = await _cancel_abandoned_councils()
+                if cancelled:
+                    logger.info("已取消 %d 场离站会议", cancelled)
+                last_lease_sweep = time.monotonic()
 
             # 并发未满才抢新任务
             if len(running_tasks) >= _MAX_CONCURRENT:

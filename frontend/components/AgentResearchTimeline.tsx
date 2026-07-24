@@ -2,15 +2,26 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AgentTraceRow } from "@/components/AgentTraceRow";
-import { AgentTraceEvent, getMember, MemberId } from "@/lib/types";
+import {
+  AgentTraceEvent,
+  getMember,
+  MemberId,
+  MemberStatus,
+} from "@/lib/types";
 
 interface Props {
   traces: AgentTraceEvent[];
   expertIds: MemberId[];
   activeMember?: MemberId | null;
+  statuses?: Partial<Record<MemberId, MemberStatus>>;
 }
 
-export function AgentResearchTimeline({ traces, expertIds, activeMember }: Props) {
+export function AgentResearchTimeline({
+  traces,
+  expertIds,
+  activeMember,
+  statuses = {},
+}: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const visible = useMemo(
     () => traces.filter((trace) => !activeMember || trace.agent_id === activeMember),
@@ -18,12 +29,17 @@ export function AgentResearchTimeline({ traces, expertIds, activeMember }: Props
   );
   const terminalIds = useMemo(
     () =>
-      new Set(
+      new Set<MemberId>([
+        ...(Object.entries(statuses)
+          .filter(([, status]) => status === "done" || status === "degraded")
+          .map(([id]) => id) as MemberId[]),
+        ...(
         traces
           .filter((trace) => ["completed", "degraded", "failed"].includes(trace.phase))
           .map((trace) => trace.agent_id)
-      ),
-    [traces]
+        ),
+      ]),
+    [statuses, traces]
   );
   const allDone = expertIds.length > 0 && expertIds.every((id) => terminalIds.has(id));
 
@@ -64,7 +80,9 @@ export function AgentResearchTimeline({ traces, expertIds, activeMember }: Props
             ))
           ) : (
             <div className="py-5 text-center text-xs text-ink-3">
-              议会正在确定每位专家的研究任务…
+              {terminalIds.size
+                ? "已完成专家的观点正在下方依次展示"
+                : "议会正在确定每位专家的研究任务…"}
             </div>
           )}
         </div>

@@ -12,7 +12,7 @@ import {
   CouncilPhaseBar,
 } from "@/components/council/CouncilPhaseBar";
 import { ExpertSeatPanel } from "@/components/council/ExpertSeatPanel";
-import { getParliament } from "@/lib/api";
+import { getParliament, heartbeatParliament } from "@/lib/api";
 import { subscribeParliament } from "@/lib/sse";
 import {
   AgentTraceEvent,
@@ -43,6 +43,8 @@ export default function ParliamentPage() {
   const [summary, setSummary] = useState<ParliamentSummary | null>(null);
   const [duration, setDuration] = useState<number | undefined>(undefined);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [workerAvailable, setWorkerAvailable] = useState(true);
+  const [serverPhase, setServerPhase] = useState<string>("queued");
 
   // 用户选中的议员（右侧详情抽屉）
   const [activeMember, setActiveMember] = useState<MemberId | null>(null);
@@ -76,6 +78,8 @@ export default function ParliamentPage() {
         setTranscript(snapshot.transcript || []);
         setToolCalls(snapshot.tool_calls || []);
         setAgentTraces(snapshot.agent_traces || []);
+        setWorkerAvailable(snapshot.worker_available !== false);
+        setServerPhase(snapshot.current_phase || snapshot.status || "queued");
         const ids = (snapshot.selected_expert_ids || []) as MemberId[];
         setSelectedExpertIds(ids);
         const snapshotMembers = snapshot.members_state || {};
@@ -107,6 +111,16 @@ export default function ParliamentPage() {
     };
   }, [parliamentId]);
 
+  useEffect(() => {
+    if (!parliamentId || status === "done" || status === "error") return;
+    heartbeatParliament(parliamentId).catch(() => {});
+    const timer = window.setInterval(
+      () => heartbeatParliament(parliamentId).catch(() => {}),
+      5_000
+    );
+    return () => window.clearInterval(timer);
+  }, [parliamentId, status]);
+
   // === SSE 订阅 ===
   useEffect(() => {
     if (!parliamentId) return;
@@ -116,7 +130,36 @@ export default function ParliamentPage() {
       (event) => {
         if (event.type === "parliament_started") {
           setStatus("running");
+          setServerPhase("claimed");
           if (event.topic) setTopic(event.topic);
+          return;
+        }
+
+        if (
+          event.type === "expert_completed" &&
+          event.expert_id &&
+          event.member &&
+          event.entry
+        ) {
+          const expertId = event.expert_id as MemberId;
+          const completedMember = event.member;
+          const completedEntry = event.entry;
+          setServerPhase("researching");
+          setMemberStatus((prev) => ({
+            ...prev,
+            [expertId]: completedMember.degraded ? "degraded" : "done",
+          }));
+          setTranscript((prev) => {
+            if (
+              prev.some(
+                (item) =>
+                  item.type === "research" && item.speaker === expertId
+              )
+            ) {
+              return prev;
+            }
+            return [...prev, completedEntry as TranscriptEntry];
+          });
           return;
         }
 
@@ -173,6 +216,16 @@ export default function ParliamentPage() {
         if (event.type === "node_complete") {
           const payload = event.payload || {};
           const node = event.node;
+          const phaseByNode: Record<string, string> = {
+            parse_topic: "claimed",
+            select_experts: "researching",
+            research: "researching",
+            select_divergent: "cross_examining",
+            cross_examination: "cross_examining",
+            select_chair: "summarizing",
+            summary: "summarizing",
+          };
+          if (node && phaseByNode[node]) setServerPhase(phaseByNode[node]);
 
           if (node === "select_experts" && Array.isArray(payload.selected_expert_ids)) {
             const ids = payload.selected_expert_ids as MemberId[];
@@ -302,6 +355,14 @@ export default function ParliamentPage() {
     }
   };
 
+  const handleReturnHome = async () => {
+    try {
+      await heartbeatParliament(parliamentId, true);
+    } finally {
+      router.push("/");
+    }
+  };
+
   const activeMemberData = activeMember
     ? {
         member: getMember(activeMember),
@@ -324,6 +385,9 @@ export default function ParliamentPage() {
 
   const phase: CouncilPhase = useMemo(() => {
     if (summary) return "summary";
+    if (serverPhase === "summarizing" || serverPhase === "done") return "summary";
+    if (serverPhase === "cross_examining") return "debate";
+    if (serverPhase === "researching") return "research";
     if (currentRound > 0) return "debate";
     if (
       agentTraces.length > 0 ||
@@ -332,7 +396,7 @@ export default function ParliamentPage() {
       return "research";
     }
     return "understanding";
-  }, [agentTraces.length, currentRound, memberStatus, summary]);
+  }, [agentTraces.length, currentRound, memberStatus, serverPhase, summary]);
 
   const phaseTitle = {
     understanding: "正在理解你的问题",
@@ -375,16 +439,29 @@ export default function ParliamentPage() {
           alt="斜杠"
           className="h-8 w-12 object-cover object-center brightness-[1.7] saturate-75 mix-blend-screen"
         />
-        <span className="grid h-10 w-10 place-items-center rounded-xl bg-[#493351] text-xl text-white">
-          ◌
-        </span>
         <button
           type="button"
-          onClick={() => router.push("/")}
-          className="grid h-10 w-10 place-items-center rounded-xl text-2xl text-[#cec7d0] transition hover:bg-[#493351] hover:text-white"
+          onClick={handleReturnHome}
+          title="返回首页"
+          className="group relative grid h-10 w-10 place-items-center rounded-xl text-[#cec7d0] transition hover:bg-[#493351] hover:text-white"
           aria-label="返回首页"
         >
-          ‹
+          <svg
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            className="h-5 w-5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="m15 18-6-6 6-6" />
+            <path d="M9 12h10" />
+          </svg>
+          <span className="pointer-events-none absolute left-12 z-40 hidden whitespace-nowrap rounded-md bg-[#201923] px-2 py-1 text-[11px] font-bold text-white shadow-lg group-hover:block">
+            返回首页
+          </span>
         </button>
       </aside>
 
@@ -468,16 +545,23 @@ export default function ParliamentPage() {
             traces={agentTraces}
             expertIds={selectedExpertIds}
             activeMember={activeMember}
+            statuses={memberStatus}
           />
 
           {status === "connecting" && (
             <div className="mx-4 my-4 rounded-xl border border-[#eadfd9] bg-[#fffaf6] px-4 py-3 text-xs leading-5 text-[#71666e]">
               <strong className="text-[#4b1c62]">
-                {selectedExpertIds.length
+                {!workerAvailable
+                  ? "分析服务暂时不可用"
+                  : selectedExpertIds.length
                   ? `${selectedExpertIds.length} 位专家已入席`
                   : "正在读取专家席"}
               </strong>
-              <span className="ml-2">正在等待分析流程开始，请稍候…</span>
+              <span className="ml-2">
+                {workerAvailable
+                  ? "已进入队列，正在等待分析服务领取…"
+                  : "会议已经保存，服务恢复后会继续处理。"}
+              </span>
             </div>
           )}
 

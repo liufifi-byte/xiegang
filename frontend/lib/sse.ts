@@ -5,6 +5,7 @@ export interface ParliamentStreamEvent {
     | "parliament_started"
     | "node_complete"
     | "agent_trace"
+    | "expert_completed"
     | "parliament_done"
     | "cancelled"
     | "error";
@@ -27,6 +28,11 @@ export interface ParliamentStreamEvent {
   duration_ms?: AgentTraceEvent["duration_ms"];
   cache_hit?: AgentTraceEvent["cache_hit"];
   timestamp?: AgentTraceEvent["timestamp"];
+  expert_id?: string;
+  member?: Record<string, any>;
+  entry?: TranscriptEntry;
+  completed_count?: number;
+  total_count?: number;
   payload?: {
     // state_update 子集（前端实际用到的）
     category?: string;

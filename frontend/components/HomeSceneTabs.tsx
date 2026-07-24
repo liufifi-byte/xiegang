@@ -12,179 +12,227 @@ interface Props {
   loading?: boolean;
 }
 
-export function HomeSceneTabs({ onSubmit, loading }: Props) {
-  const [topic, setTopic] = useState("");
-  const [category, setCategory] = useState<string | null>(null);
-  const [background, setBackground] = useState("");
+const SCENE_DEFAULT_QUESTIONS: Record<string, string> = {
+  real_estate: "要不要买房？",
+  offer: "要不要接这个 offer？",
+  job_change: "要不要跳槽？",
+  investment: "要不要做这笔投资？",
+  entrepreneurship: "要不要创业？",
+  gold: "要不要买黄金？",
+  stocks: "要不要买这只股票？",
+  buy_bag: "要不要买这个包？",
+};
 
-  const handleSceneClick = (cat: string, displayName: string) => {
-    setCategory(cat);
-    if (!topic.trim()) setTopic(`要不要${displayName}？`);
+const GENERAL_EXAMPLES = [
+  "要不要接受这份看起来稳定、但成长很慢的工作？",
+  "现在买房，还是再等一年？",
+  "该不该和合伙人继续做下去？",
+];
+
+const SECTION_TITLE_CLASS = "text-sm font-bold text-[#4b3e4d]";
+
+export function HomeSceneTabs({ onSubmit, loading }: Props) {
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [sceneTopic, setSceneTopic] = useState("");
+  const [background, setBackground] = useState("");
+  const [generalQuestion, setGeneralQuestion] = useState("");
+
+  const handleSceneClick = (category: string) => {
+    setSelectedCategory(category);
+    setSceneTopic(
+      SCENE_DEFAULT_QUESTIONS[category] ||
+        `要不要${TOPIC_TEMPLATES.find((item) => item.category === category)?.display_name || "做这个决定"}？`
+    );
+    window.setTimeout(() => {
+      document
+        .getElementById("scene-decision-form")
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 0);
   };
 
-  const handleSubmit = () => {
-    if (!topic.trim() || loading) return;
-    onSubmit(topic, category, background);
+  const submitScene = () => {
+    if (
+      !selectedCategory ||
+      !sceneTopic.trim() ||
+      !background.trim() ||
+      loading
+    ) {
+      return;
+    }
+    onSubmit(sceneTopic.trim(), selectedCategory, background.trim());
+  };
+
+  const submitGeneral = () => {
+    if (!generalQuestion.trim() || loading) return;
+    onSubmit(generalQuestion.trim(), "general", "");
   };
 
   return (
-    <div className="max-w-3xl mx-auto px-6 pb-32">
-      {/* 大标题区 */}
-      <header className="pt-24 pb-16 text-center">
-        <h1 className="font-serif text-6xl font-medium tracking-tight text-ink mb-4">
-          邪杠会议室
-        </h1>
-        <p className="leading-relaxed">
-          <span className="text-base text-ink-2 tracking-wide">先</span>
-          <span className="text-gold font-serif text-5xl font-bold mx-1.5 leading-none">杠</span>
-          <span className="text-base text-ink-2 tracking-wide">一杠，再下结论</span>
-        </p>
-      </header>
+    <div className="max-w-3xl mx-auto px-5 sm:px-6 pb-28">
+      <BrandHeader />
 
-      {/* 8 场景网格 */}
-      <section className="mb-12">
-        <div className="flex items-center gap-3 mb-5">
-          <span className="text-xs uppercase tracking-wider text-ink-2 font-medium">
-            精选场景
-          </span>
-          <span className="flex-1 h-px bg-edge" />
-        </div>
-
+      <section className="mb-10">
+        <SectionTitle>精选场景</SectionTitle>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {TOPIC_TEMPLATES.map((t) => (
+          {TOPIC_TEMPLATES.map((template) => (
             <button
-              key={t.category}
-              onClick={() => handleSceneClick(t.category, t.display_name)}
-              className={`group p-5 rounded-md border text-left transition-all ${
-                category === t.category
-                  ? "border-brand bg-white ring-1 ring-brand/30"
-                  : "bg-bg-surface border-transparent hover:border-edge-strong hover:bg-white"
+              key={template.category}
+              type="button"
+              aria-pressed={selectedCategory === template.category}
+              onClick={() => handleSceneClick(template.category)}
+              className={`px-5 py-4 rounded-xl border text-left transition-all text-base font-medium ${
+                selectedCategory === template.category
+                  ? "border-[#4b1c62] bg-[#f3e9f3] text-[#30103f] ring-1 ring-[#4b1c62]/20"
+                  : "border-[#e9ded8] bg-[#fffdfb] text-[#251536] hover:-translate-y-0.5 hover:border-[#4b1c62]/45 hover:shadow-md"
               }`}
             >
-              <div className="text-base font-medium text-ink leading-none mb-1.5">
-                {t.display_name}
-              </div>
-              <div className="text-xs text-ink-3 tracking-wider">
-                {t.hint}
-              </div>
+              {template.display_name}
             </button>
           ))}
         </div>
       </section>
 
-      {/* 通用 Agent 独立大入口（与场景卡视觉上区分） */}
-      <section className="mb-12">
-        <div className="flex items-center gap-3 mb-5">
-          <span className="text-xs uppercase tracking-wider text-ink-2 font-medium">
-            通用场景
-          </span>
-          <span className="flex-1 h-px bg-edge" />
-        </div>
-
-        <button
-          onClick={() => {
-            setCategory("general");
-            // 不预填议题，让用户自己写
-            setTimeout(() => {
-              document
-                .getElementById("custom-topic-input")
-                ?.scrollIntoView({ behavior: "smooth", block: "center" });
-            }, 0);
-          }}
-          className={`w-full text-left p-6 rounded-md border-2 transition-all bg-bg-surface relative overflow-hidden ${
-            category === "general"
-              ? "border-brand ring-1 ring-brand/30 bg-white"
-              : "border-transparent hover:border-edge-strong hover:bg-white"
-          }`}
-        >
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-base font-medium text-ink">
-                  通用议会
-                </span>
-                <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-ink/10 text-ink-2">
-                  5 议员全出动
-                </span>
-              </div>
-              <p className="text-sm text-ink-2 leading-relaxed">
-                没有合适的固定场景？把任何决策放进来——
-                个人选择、家庭议题、人际判断、要不要换城市、要不要冷处理某段关系……
-                5 位议员会从理性 / 风险 / 机会 / 长期 / 反共识 五个角度跟你过一遍。
-              </p>
-            </div>
-            <svg
-              width="20" height="20" viewBox="0 0 24 24" fill="none"
-              className="text-brand flex-shrink-0 mt-1"
-            >
-              <path
-                d="M5 12h14M13 5l7 7-7 7"
-                stroke="currentColor" strokeWidth="2"
-                strokeLinecap="round" strokeLinejoin="round"
-              />
-            </svg>
+      {selectedCategory && (
+        <section id="scene-decision-form" className="mb-12 animate-slide-in">
+          <div className="mb-5">
+            <label htmlFor="scene-topic" className={`${SECTION_TITLE_CLASS} mb-3 block`}>
+              描述你的决策
+            </label>
+            <textarea
+              id="scene-topic"
+              value={sceneTopic}
+              onChange={(event) => setSceneTopic(event.target.value)}
+              rows={3}
+              className="w-full min-h-28 resize-none rounded-xl border border-[#e9ded8] bg-white px-4 py-3.5 text-base leading-relaxed text-[#251536] placeholder:text-[#aaa0a6] focus:border-[#4b1c62] focus:outline-none focus:ring-4 focus:ring-[#4b1c62]/10"
+            />
           </div>
-        </button>
-      </section>
 
-      {/* 自定义输入 */}
+          <div>
+            <label htmlFor="scene-background" className={`${SECTION_TITLE_CLASS} mb-3 block`}>
+              关键背景
+            </label>
+            <textarea
+              id="scene-background"
+              value={background}
+              onChange={(event) => setBackground(event.target.value)}
+              rows={4}
+              className="w-full min-h-32 resize-none rounded-xl border border-[#e9ded8] bg-white px-4 py-3.5 text-sm leading-relaxed text-[#251536] placeholder:text-[#aaa0a6] focus:border-[#4b1c62] focus:outline-none focus:ring-4 focus:ring-[#4b1c62]/10"
+              placeholder="请补充会影响决定的事实：你的目标、预算或收入、时间限制、家庭与地理约束、目前已有方案，以及你最担心的结果。"
+            />
+          </div>
+
+          <div className="mt-5 flex justify-end">
+            <PrimaryButton
+              onClick={submitScene}
+              disabled={!sceneTopic.trim() || !background.trim() || Boolean(loading)}
+              loading={loading}
+            />
+          </div>
+        </section>
+      )}
+
       <section>
-        <div
-          id="custom-topic-input"
-          className="flex items-center gap-3 mb-5"
-        >
-          <span className="text-xs uppercase tracking-wider text-ink-2 font-medium">
-            {category === "general" ? "你的问题" : "或描述你自己的决策"}
-          </span>
-          <span className="flex-1 h-px bg-edge" />
-        </div>
-
-        <textarea
-          value={topic}
-          onChange={(e) => setTopic(e.target.value)}
-          rows={4}
-          className="w-full p-5 bg-bg-surface border border-edge rounded-md text-ink placeholder:text-ink-3 focus:outline-none focus:border-brand focus:ring-1 focus:ring-brand/30 resize-none text-base leading-relaxed"
-          placeholder="例：要不要接这个远程创业公司的 CTO offer？现金少 40%，给 2% 股权。"
-        />
-
-        <div className="mt-4">
-          <label className="text-xs uppercase tracking-wider text-ink-2 font-medium mb-2 block">
-            关键背景{" "}
-            <span className="text-ink-3 normal-case lowercase tracking-normal">
-              （选填）
-            </span>
+        <SectionTitle>通用场景</SectionTitle>
+        <div className="rounded-[20px] border border-[#5b3052]/15 bg-white/85 px-5 py-5 sm:px-6 shadow-[0_24px_70px_rgba(54,28,53,0.12)] backdrop-blur">
+          <label htmlFor="general-question" className={`${SECTION_TITLE_CLASS} mb-3 block`}>
+            你想和大家讨论什么？
           </label>
           <textarea
-            value={background}
-            onChange={(e) => setBackground(e.target.value)}
+            id="general-question"
+            value={generalQuestion}
+            onChange={(event) => setGeneralQuestion(event.target.value)}
             rows={3}
-            className="w-full p-4 bg-bg-surface border border-edge rounded-md text-ink placeholder:text-ink-3 focus:outline-none focus:border-brand focus:ring-1 focus:ring-brand/30 resize-none text-sm leading-relaxed"
-            placeholder="现职年薪、家庭负担、房贷、地理约束、健康状况……越具体议会越准。"
+            maxLength={240}
+            className="w-full min-h-28 resize-none rounded-xl border border-[#e9ded8] bg-[#fffdfb] px-4 py-3.5 text-base leading-relaxed text-[#251536] placeholder:text-[#aaa0a6] focus:border-[#4b1c62] focus:outline-none focus:ring-4 focus:ring-[#4b1c62]/10"
+            placeholder="例如：我现在该不该辞职，去做一个还没有收入的独立项目？"
           />
+          <div className="mt-3.5 flex items-center justify-between gap-4">
+            <span className="text-xs text-[#998e96]" aria-live="polite">
+              {generalQuestion.length} / 240
+            </span>
+            <PrimaryButton
+              onClick={submitGeneral}
+              disabled={!generalQuestion.trim() || Boolean(loading)}
+              loading={loading}
+            />
+          </div>
         </div>
 
-        <div className="mt-6 flex justify-end">
-          <button
-            onClick={handleSubmit}
-            disabled={!topic.trim() || loading}
-            className="px-8 py-3 bg-brand text-white rounded-md font-medium disabled:opacity-40 disabled:cursor-not-allowed hover:bg-brand-hover transition flex items-center gap-2"
-          >
-            {loading ? (
-              <>
-                <Spinner /> 召集中
-              </>
-            ) : (
-              <>召集议会 →</>
-            )}
-          </button>
+        <div className="mt-4 flex flex-wrap justify-center gap-2" aria-label="示例问题">
+          {GENERAL_EXAMPLES.map((example) => (
+            <button
+              key={example}
+              type="button"
+              onClick={() => setGeneralQuestion(example)}
+              className="max-w-full rounded-full border border-[#eadfd9] bg-white/60 px-3 py-2 text-left text-xs text-[#71646e] transition hover:border-[#ec403d]/55 hover:text-[#ec403d]"
+            >
+              {example}
+            </button>
+          ))}
         </div>
       </section>
     </div>
   );
 }
 
+function BrandHeader() {
+  return (
+    <header className="pt-10 sm:pt-14 pb-10 text-center">
+      <img
+        src="/brand/xiegang-logo.png"
+        alt="斜杠"
+        width={1150}
+        height={520}
+        className="mx-auto block h-auto w-[260px] max-w-[82vw] sm:w-[310px] mix-blend-multiply"
+      />
+      <p className="mt-1 text-xs font-bold tracking-[0.14em] text-[#ec403d]">
+        DECISION COUNCIL
+      </p>
+      <p className="mt-3 font-serif text-xl text-[#251536] sm:text-2xl">
+        先<span className="mx-1 font-bold text-[#ec403d]">杠</span>一杠，再下结论
+      </p>
+    </header>
+  );
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-4 flex items-center gap-3">
+      <h2 className={SECTION_TITLE_CLASS}>{children}</h2>
+      <span className="h-px flex-1 bg-[#e9ded8]" />
+    </div>
+  );
+}
+
+function PrimaryButton({
+  onClick,
+  disabled,
+  loading,
+}: {
+  onClick: () => void;
+  disabled: boolean;
+  loading?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="inline-flex min-h-11 items-center justify-center gap-2 rounded-[10px] bg-gradient-to-br from-[#30103f] to-[#4b1c62] px-5 font-bold text-white shadow-[0_9px_18px_rgba(60,20,78,0.18)] transition hover:-translate-y-0.5 hover:from-[#431456] hover:to-[#68227d] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none disabled:hover:translate-y-0"
+    >
+      {loading ? (
+        <>
+          <Spinner /> 正在准备
+        </>
+      ) : (
+        <>选择讨论者 →</>
+      )}
+    </button>
+  );
+}
+
 function Spinner() {
   return (
-    <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
   );
 }
