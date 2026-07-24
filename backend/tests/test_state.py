@@ -36,3 +36,9 @@ def test_state_can_be_assigned_as_typeddict():
     state["members"] = {"suan": {"stance": "for"}}
     assert state["current_round"] == 2
     assert state["members"]["suan"]["stance"] == "for"
+
+
+def test_make_initial_state_preserves_selected_experts():
+    selected = ["mathematician", "economist", "psychologist"]
+    state = make_initial_state(topic="买房", selected_expert_ids=selected)
+    assert state["selected_expert_ids"] == selected

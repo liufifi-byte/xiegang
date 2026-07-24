@@ -54,3 +54,18 @@ def test_selector_is_deterministic():
         "briefing": {"key_variables": ["职业", "身份", "成本"]},
     }
     assert select_experts(state) == select_experts(state)
+
+
+def test_selector_preserves_user_confirmed_roster():
+    selected = ["artist", "psychologist", "historian"]
+    result = select_experts(
+        {
+            "topic": "要不要换一种生活方式",
+            "category": "general",
+            "briefing": {},
+            "selected_expert_ids": selected,
+        }
+    )
+    assert result["selected_expert_ids"] == selected
+    assert set(result["expert_selection_reasons"]) == set(selected)
+    assert set(result["debate_duties"]) == set(selected)

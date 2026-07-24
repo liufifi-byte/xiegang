@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as health_router
+from app.api.expert_selection import router as expert_selection_router
 from app.api.parliament import router as parliament_router
 from app.api.stream import router as stream_router
 from app.config import get_settings
@@ -37,6 +38,7 @@ app.add_middleware(
 )
 
 app.include_router(health_router, prefix="/api", tags=["health"])
+app.include_router(expert_selection_router)
 app.include_router(parliament_router, tags=["parliament"])
 app.include_router(stream_router, tags=["stream"])
 

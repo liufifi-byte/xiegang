@@ -28,6 +28,62 @@ def test_parliament_create_endpoint_returns_id(client, monkeypatch):
     assert data["parliament_id"] == "test-parliament-id"
 
 
+def test_parliament_create_persists_confirmed_experts(client, monkeypatch):
+    from app.api import parliament as parl_api
+
+    inserted = {}
+
+    class MockSupabase:
+        def table(self, name):
+            class Table:
+                def insert(self, data):
+                    inserted.update(data)
+
+                    class Exec:
+                        def execute(self_inner):
+                            class Result:
+                                data = [{"id": "confirmed-roster"}]
+
+                            return Result()
+
+                    return Exec()
+
+            return Table()
+
+    monkeypatch.setattr(parl_api, "get_supabase", lambda: MockSupabase())
+    selected = ["mathematician", "economist", "psychologist"]
+    response = client.post(
+        "/api/parliament",
+        json={
+            "topic": "是否换工作",
+            "selected_expert_ids": selected,
+        },
+    )
+    assert response.status_code == 200
+    assert inserted["selected_expert_ids"] == selected
+
+
+def test_parliament_create_rejects_invalid_rosters(client):
+    for selected in (
+        ["mathematician", "economist"],
+        [
+            "mathematician",
+            "economist",
+            "psychologist",
+            "historian",
+            "artist",
+            "politician",
+        ],
+        ["mathematician", "economist", "unknown"],
+        ["mathematician", "economist", "economist"],
+    ):
+        response = client.post(
+            "/api/parliament",
+            json={"topic": "测试", "selected_expert_ids": selected},
+        )
+        assert response.status_code == 422
+
+
 def test_parliament_get_returns_404_for_missing(client, monkeypatch):
     from app.api import parliament as parl_api
 

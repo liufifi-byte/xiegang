@@ -78,6 +78,11 @@ def _general_roster(topic: str, variables: list[str]) -> tuple[str, ...]:
 
 
 def select_experts(state: dict) -> dict:
+    confirmed = state.get("selected_expert_ids") or []
+    if confirmed:
+        from app.services.expert_selection import selection_state
+
+        return selection_state(list(confirmed))
     category = state.get("category") or state.get("topic_category") or "general"
     variables = state.get("briefing", {}).get("key_variables", [])
     roster = CATEGORY_ROSTERS.get(category)

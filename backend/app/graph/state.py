@@ -55,6 +55,7 @@ def make_initial_state(
     topic_category: str | None = None,
     user_background: str | None = None,
     parliament_id: str | None = None,
+    selected_expert_ids: list[str] | None = None,
 ) -> ParliamentState:
     """方便地构造一个干净的初始 state（所有字段都有默认值）。"""
     return {
@@ -64,7 +65,7 @@ def make_initial_state(
         "user_background": user_background,
         "briefing": {},
         "category": None,
-        "selected_expert_ids": [],
+        "selected_expert_ids": list(selected_expert_ids or []),
         "expert_selection_reasons": {},
         "debate_duties": {},
         "agent_results": {},

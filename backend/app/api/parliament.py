@@ -61,6 +61,7 @@ async def create_parliament(req: CreateParliamentRequest, request: Request) -> d
         "members_state": {},
         "transcript": [],
         "tool_calls": [],
+        "selected_expert_ids": req.selected_expert_ids,
     }
     result = supabase.table("parliaments").insert(row).execute()
 
@@ -151,7 +152,10 @@ async def get_parliament(parliament_id: str) -> ParliamentResponse:
         transcript=data.get("transcript", []),
         tool_calls=tool_calls,
         members_state=data.get("members_state", {}),
-        selected_expert_ids=summary.get("selected_expert_ids", []),
+        selected_expert_ids=(
+            data.get("selected_expert_ids")
+            or summary.get("selected_expert_ids", [])
+        ),
         agent_results=summary.get("agent_results", {}),
         agent_traces=[
             item["trace"]

@@ -60,7 +60,8 @@ async def fetch_next_queued_parliament() -> dict | None:
             with conn.cursor() as cur:
                 cur.execute("SET LOCAL lock_timeout = '3s'")
                 cur.execute("""
-                    SELECT id, topic, topic_category, user_background, user_id, device_id
+                    SELECT id, topic, topic_category, user_background, user_id, device_id,
+                           selected_expert_ids
                     FROM parliaments
                     WHERE status = 'queued'
                     ORDER BY created_at ASC
@@ -71,7 +72,15 @@ async def fetch_next_queued_parliament() -> dict | None:
                 if row is None:
                     conn.rollback()
                     return None
-                cols = ["id", "topic", "topic_category", "user_background", "user_id", "device_id"]
+                cols = [
+                    "id",
+                    "topic",
+                    "topic_category",
+                    "user_background",
+                    "user_id",
+                    "device_id",
+                    "selected_expert_ids",
+                ]
                 task = dict(zip(cols, row))
                 cur.execute(
                     """UPDATE parliaments
@@ -97,6 +106,7 @@ def _build_initial_state(task: dict) -> dict:
         topic_category=task.get("topic_category"),
         user_background=task.get("user_background"),
         parliament_id=str(task["id"]),
+        selected_expert_ids=task.get("selected_expert_ids"),
     ) | {"started_at": time.time()}
 
 
