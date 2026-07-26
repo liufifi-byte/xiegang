@@ -74,3 +74,31 @@ async def test_anonymous_agent_cannot_see_or_call_personal_memory_tool():
     signed_in_context = ToolContext("economist", "user-1", "offer")
     signed_in_schemas = registry.schemas_for(profile, signed_in_context)
     assert "memory_search" in {schema["name"] for schema in signed_in_schemas}
+
+
+@pytest.mark.asyncio
+async def test_failed_web_search_opens_circuit_for_rest_of_meeting():
+    calls = 0
+
+    async def unavailable_handler(args: BaseModel, context: ToolContext):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("provider unavailable")
+
+    registry = ToolRegistry(
+        tools=[RegisteredTool("web_search", Args, unavailable_handler)]
+    )
+    profile = get_expert_profile("economist")
+    context = ToolContext("economist", None, "offer")
+
+    first = await registry.execute(
+        profile, "web_search", {"value": "query one"}, context
+    )
+    second = await registry.execute(
+        profile, "web_search", {"value": "query two"}, context
+    )
+
+    assert first.ok is False
+    assert second.error_code == "tool_unavailable"
+    assert "推断假设" in second.public_error
+    assert calls == 1

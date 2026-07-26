@@ -63,6 +63,7 @@ class EvidenceLedger:
                 strength=strength,
                 kind=kind,
                 supports_claim=item.content[:180],
+                published_at=item.metadata.get("publish_date"),
                 calculation_inputs=item.metadata.get("inputs", {}),
                 calculation_formula=item.metadata.get("formula"),
                 assumptions=list(item.metadata.get("assumptions", []))[:5],

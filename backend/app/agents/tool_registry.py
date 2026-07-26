@@ -79,6 +79,10 @@ async def _web_search_handler(args: BaseModel, _: ToolContext) -> list[ToolResul
             url=item.get("url"),
             content=str(item.get("content") or ""),
             score=item.get("score"),
+            metadata={
+                "media": item.get("media"),
+                "publish_date": item.get("publish_date"),
+            },
         )
         for item in raw[: parsed.max_results]
     ]
@@ -136,6 +140,7 @@ class ToolRegistry:
         ]
         self._tools = {tool.name: tool for tool in tools}
         self.cache = cache or ParliamentToolCache()
+        self._unavailable_tools: set[str] = set()
 
     def schemas_for(
         self,
@@ -176,6 +181,18 @@ class ToolRegistry:
                 ok=False,
                 error_code="unknown_tool",
                 public_error="请求的工具不存在",
+            )
+        if tool_name in self._unavailable_tools:
+            return ToolObservation(
+                tool_call_id=call_id,
+                tool_name=tool_name,
+                ok=False,
+                error_code="tool_unavailable",
+                public_error=(
+                    "网页来源暂未核实，本轮仅使用用户信息、计算结果与明确标注的推断假设"
+                    if tool_name == "web_search"
+                    else "该工具本轮暂时不可用"
+                ),
             )
         if tool_name not in profile.allowed_tools:
             return ToolObservation(
@@ -234,12 +251,18 @@ class ToolRegistry:
                 duration_ms=int((time.monotonic() - started) * 1000),
             )
         except Exception:
+            if tool_name == "web_search":
+                self._unavailable_tools.add(tool_name)
             observation = ToolObservation(
                 tool_call_id=call_id,
                 tool_name=tool_name,
                 ok=False,
                 error_code="tool_failed",
-                public_error="工具暂时不可用，专家将使用现有信息继续分析",
+                public_error=(
+                    "网页来源暂未核实，本轮仅使用用户信息、计算结果与明确标注的推断假设"
+                    if tool_name == "web_search"
+                    else "工具暂时不可用，专家将使用现有信息继续分析"
+                ),
                 duration_ms=int((time.monotonic() - started) * 1000),
             )
         self.cache.set(tool_name, normalized_args, observation)

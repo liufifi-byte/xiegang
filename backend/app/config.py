@@ -27,8 +27,11 @@ class Settings(BaseSettings):
     # P0-S2: langgraph checkpointer 用直连（绕 PgBouncer 不支持 prepared statements）
     supabase_db_url_direct: str = ""
 
-    # Tavily
-    tavily_api_key: str
+    # Independent GLM Web Search API
+    web_search_engine: str = "search_std"
+    web_search_timeout_seconds: float = 15.0
+    # Kept optional only so older local .env files continue to load.
+    tavily_api_key: str = ""
 
     # 应用配置
     app_env: str = "development"
