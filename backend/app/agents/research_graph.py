@@ -89,6 +89,10 @@ def build_reason_prompt(
 ## 表达方式
 {'; '.join(profile.communication_style)}
 
+## 你的腔调范例
+模仿以下发言的锐度和人格张力，但不要照搬具体内容：
+{chr(10).join(profile.voice_examples)}
+
 ## 必须检查
 {'; '.join(profile.required_questions)}
 
