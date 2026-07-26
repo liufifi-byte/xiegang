@@ -111,7 +111,12 @@ async def _set_phase(parliament_id: str, phase: str) -> None:
 
 
 async def _cancel_abandoned_councils() -> int:
-    """Cancel councils whose browser lease expired, with refresh grace."""
+    """Cancel councils whose browser lease expired, with refresh grace.
+
+    P0 fix: 只取消 last_client_heartbeat 被设过且超过 60s 没刷新的议会。
+    POST 创建时不写 heartbeat（只在 SSE 连上后才写），避免刚创建就被误取消。
+    超时从 20s 放到 60s——给网络抖动留余地。
+    """
     def find() -> list[str]:
         with psycopg.connect(_clean_db_url(), connect_timeout=30) as conn:
             with conn.cursor() as cur:
@@ -121,7 +126,7 @@ async def _cancel_abandoned_councils() -> int:
                     FROM parliaments
                     WHERE status IN ('queued', 'running')
                       AND last_client_heartbeat IS NOT NULL
-                      AND last_client_heartbeat < now() - interval '20 seconds'
+                      AND last_client_heartbeat < now() - interval '60 seconds'
                       AND (
                         keep_alive_until IS NULL
                         OR keep_alive_until < now()

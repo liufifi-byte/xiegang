@@ -137,7 +137,7 @@ async def _debate_one_member_async(
         return await guard_ainvoke(
             parliament_id=parliament_id or "_no_parliament",
             coro=structured.ainvoke(prompt),
-            timeout=60,  # P0-S1.2: 单 LLM 调用硬上限 60s
+            timeout=120,  # 单 LLM 调用硬上限 120s（含 web search 耗时）
         )
 
 

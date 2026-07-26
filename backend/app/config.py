@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001"
 
     # P0-S1.2 议会总超时（秒）
-    parliament_total_timeout: int = 480  # 8 分钟
+    parliament_total_timeout: int = 720  # 12 分钟（含 web search + ReAct 调研 + 3 轮议会 + 选举 + 总结）
 
     # Expert ReAct Agent 执行预算
     agent_max_reason_steps: int = 3

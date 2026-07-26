@@ -89,7 +89,8 @@ async def create_parliament(req: CreateParliamentRequest, request: Request) -> d
         "tool_calls": [],
         "selected_expert_ids": req.selected_expert_ids,
         "current_phase": "queued",
-        "last_client_heartbeat": datetime.now(timezone.utc).isoformat(),
+        # P0 fix: 不在 POST 时写 heartbeat——否则 worker 20s 内看到 heartbeat 过期就 cancel
+        # 让 SSE 连上后第一次 heartbeat 才开始计时
     }
     result = supabase.table("parliaments").insert(row).execute()
 

@@ -148,7 +148,7 @@ async def _research_for_member_async(
         stmt = await guard_ainvoke(
             parliament_id=parliament_id or "_no_parliament",
             coro=structured.ainvoke(prompt),
-            timeout=60,  # P0-S1.2: 单 LLM 调用硬上限 60s
+            timeout=120,  # 单 LLM 调用硬上限 120s（含 web search 耗时）
         )
     # 把真实工具调用 record 夹带返回（不影响 MemberStatement 类型，
     # 调用方负责处理）
