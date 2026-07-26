@@ -289,8 +289,8 @@ def run_summary(state: dict) -> dict:
             "analysis_basis": analysis_basis,
             "basis_assessment": basis_assessment,
             "round_count": int(state.get("current_round", 0)),
-            "chair": None,
-            "chair_name": "中立主持人",
+            "chair": state.get("chair"),
+            "chair_name": state.get("chair_name") or "中立主持人",
         }
     )
     # Deliberately exclude agent_results, agent_traces, tool calls and timings.

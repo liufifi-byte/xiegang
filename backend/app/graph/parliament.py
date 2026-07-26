@@ -10,6 +10,7 @@ V2-S1: 接受 checkpointer 参数，配合 thread_id 实现跨重启续盘。
 from langgraph.graph import END, StateGraph
 
 from app.graph.nodes.archive import run_archive
+from app.graph.nodes.chair_endorsement import run_quick_chair_endorsement
 from app.graph.nodes.council_rounds import (
     assess_third_round,
     extract_core_disputes,
@@ -50,6 +51,7 @@ def build_parliament_graph(checkpointer=None):
     workflow.add_node("cross_examination_round", run_cross_examination_round)
     workflow.add_node("assess_third_round", assess_third_round)
     workflow.add_node("convergence_round", run_convergence_round)
+    workflow.add_node("chair_endorsement", run_quick_chair_endorsement)
     workflow.add_node("summary", run_summary)
     workflow.add_node("archive", run_archive)
 
@@ -65,10 +67,11 @@ def build_parliament_graph(checkpointer=None):
         route_after_round_two,
         {
             "convergence": "convergence_round",
-            "summary": "summary",
+            "summary": "chair_endorsement",
         },
     )
-    workflow.add_edge("convergence_round", "summary")
+    workflow.add_edge("convergence_round", "chair_endorsement")
+    workflow.add_edge("chair_endorsement", "summary")
     workflow.add_edge("summary", "archive")
     workflow.add_edge("archive", END)
 

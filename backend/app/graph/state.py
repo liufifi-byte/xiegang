@@ -44,6 +44,8 @@ class ParliamentState(TypedDict):
     transcript: list[dict]        # [{speaker, round, content, evidence, type}]
     tool_calls: list[dict]        # [{member, tool, args, result, timestamp}]
     election_result: dict | None
+    chair: str | None              # P0 step3: 当选议长 expert_id
+    chair_name: str | None         # P0 step3: 议长显示名
     summary: dict | None
 
     # === 用户干预 ===
@@ -104,6 +106,8 @@ def make_initial_state(
         "transcript": [],
         "tool_calls": [],
         "election_result": None,
+        "chair": None,
+        "chair_name": None,
         "summary": None,
         "user_interrupt": None,
         "interrupt_pending": False,
