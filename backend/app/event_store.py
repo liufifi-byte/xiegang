@@ -2,7 +2,8 @@
 
 每个议会有一系列按 seq 递增的事件：
   parliament_started → node_complete(parse_topic) → node_complete(research)
-  → node_complete(debate R1) → ... → parliament_done
+  → opening_round → cross_examination_round → optional convergence_round
+  → summary → parliament_done
 
 Worker 每完成一个节点就 append_event。
 SSE 端 500ms 轮询 fetch_events_since(last_seq) 拿新事件推给前端。
