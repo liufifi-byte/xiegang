@@ -1,263 +1,202 @@
 "use client";
 
 import {
-  AgentTraceEvent,
-  ElectionResult,
-  MemberId,
+  BasisLevel,
   ParliamentSummary,
   Stance,
+  SummaryEvidence,
   TranscriptEntry,
   getMember,
 } from "@/lib/types";
-import { ElectionDetail } from "./ElectionDetail";
-import { AgentResearchTimeline } from "./AgentResearchTimeline";
 
 interface Props {
   summary: ParliamentSummary;
   topic: string;
   durationSeconds?: number;
-  /** 用户在议会里说过的话（V1-S1 临时从 sessionStorage 拿，S3 改为后端 archive） */
   userMessages?: TranscriptEntry[];
-  agentTraces?: AgentTraceEvent[];
-  selectedExpertIds?: MemberId[];
 }
 
-/**
- * 议会纪要：杂志式版面，左大标题 + 右内容，分隔线明显，无圆角卡片。
- */
+const BASIS_LABEL: Record<BasisLevel, string> = {
+  limited: "判断基础有限",
+  moderate: "判断基础一般",
+  strong: "判断基础较强",
+};
+
+const STRENGTH_LABEL = {
+  conditional: "条件性建议",
+  clear: "明确建议",
+  insufficient: "信息仍不足",
+};
+
 export function SummaryPanel({
   summary,
   topic,
   durationSeconds,
   userMessages = [],
-  agentTraces = [],
-  selectedExpertIds = [],
 }: Props) {
-  const chair = summary.chair ? getMember(summary.chair) : undefined;
+  const recommendation = summary.recommendation || summary.advice;
+  const basisLevel = summary.basis_assessment?.level || "limited";
+  const nextAction = summary.next_actions?.[0] || summary.open_questions?.[0];
 
   return (
-    <article className="max-w-3xl mx-auto px-8 py-16">
-      {/* 杂志标题区 */}
-      <header className="mb-16 pb-8 border-b-2 border-ink">
-        <div className="text-xs uppercase tracking-widest text-ink-muted mb-3">
-          议会纪要
-          {durationSeconds !== undefined && (
-            <>
-              <span className="mx-2 text-ink-subtle">·</span>
-              时长 {durationSeconds}s
-            </>
+    <article className="mx-auto max-w-4xl px-5 py-10 sm:px-8 sm:py-16">
+      <header className="mb-10 border-b-2 border-[#2d2830] pb-7">
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-xs tracking-[0.14em] text-[#8b838b]">
+          <span>DECISION COUNCIL · 议会结论</span>
+          {summary.round_count !== undefined && (
+            <span>· {summary.round_count} 轮正式讨论</span>
           )}
+          {durationSeconds !== undefined && <span>· {durationSeconds}s</span>}
         </div>
-        <h1 className="font-serif text-4xl md:text-5xl font-medium text-ink leading-tight mb-4">
+        <h1 className="font-serif text-3xl font-medium leading-tight text-[#2d2830] sm:text-5xl">
           {topic}
         </h1>
-        {chair && (
-          <div className="flex items-center gap-2 text-sm">
-            <span
-              className="inline-block w-2.5 h-2.5 rounded-full"
-              style={{ backgroundColor: chair.color }}
-            />
-            <span className="text-ink-secondary">
-              当选议长：
-              <span className="font-medium" style={{ color: chair.color }}>
-                {chair.display_name}
-              </span>
-              {summary.fallback_used && (
-                <span className="text-ink-subtle ml-2 italic">
-                  （兜底任命）
-                </span>
-              )}
-            </span>
-          </div>
-        )}
-
-        {/* V1-S1.2 议员最终立场分布 */}
-        {summary.member_stances && (
-          <MemberStanceBar stances={summary.member_stances} />
-        )}
       </header>
 
-      {selectedExpertIds.length > 0 && (
-        <div className="mb-12 -mx-4">
-          <AgentResearchTimeline
-            traces={agentTraces}
-            expertIds={selectedExpertIds}
-          />
+      <section className="mb-12 rounded-[22px] border border-[#ddcfd3] bg-[#fffdfb] p-6 shadow-[0_18px_55px_rgba(60,34,55,0.08)] sm:p-8">
+        <div className="mb-5 flex flex-wrap items-center gap-2">
+          <span className="rounded-full bg-[#4b1c62] px-3 py-1 text-xs font-bold text-white">
+            一分钟结论
+          </span>
+          <span className="rounded-full bg-[#fff0ed] px-3 py-1 text-xs font-bold text-[#a44343]">
+            {STRENGTH_LABEL[summary.recommendation_strength || "insufficient"]}
+          </span>
+          <span className="rounded-full bg-[#f0ecef] px-3 py-1 text-xs font-bold text-[#675d67]">
+            {BASIS_LABEL[basisLevel]}
+          </span>
         </div>
-      )}
-
-      {summary.agent_results && (
-        <MagazineSection
-          label="Research Evidence"
-          title="专家调研与证据"
-          emptyHint="本次会议没有外部调研记录"
-        >
-          <div className="space-y-5">
-            {Object.entries(summary.agent_results).map(([expertId, archive]) => {
-              const expert = getMember(expertId);
-              const result = archive.result;
-              return (
-                <div key={expertId} className="border-l-2 pl-4" style={{ borderColor: expert?.color }}>
-                  <div className="flex flex-wrap items-baseline gap-2">
-                    <span className="font-medium" style={{ color: expert?.color }}>
-                      {expert?.display_name || expertId}
-                    </span>
-                    <span className="text-xs text-ink-3">
-                      {archive.metrics?.tool_calls || 0} 次工具行动
-                      {archive.metrics?.duration_ms !== undefined &&
-                        ` · ${(archive.metrics.duration_ms / 1000).toFixed(1)}s`}
-                    </span>
-                    {result.degraded && (
-                      <span className="rounded bg-stance-neutralBg px-1.5 py-0.5 text-[10px] text-stance-neutralText">
-                        信息有限
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-1.5 text-sm leading-relaxed text-ink">{result.thesis}</p>
-                  {archive.evidence && archive.evidence.length > 0 && (
-                    <ul className="mt-2 space-y-1.5">
-                      {archive.evidence.map((evidence) => (
-                        <li key={evidence.evidence_id} className="text-xs leading-relaxed text-ink-2">
-                          <span className="mr-1 text-ink-4">[{evidence.strength}]</span>
-                          {evidence.claim_summary}
-                          {evidence.source_url ? (
-                            <a
-                              href={evidence.source_url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="ml-1 text-brand hover:underline"
-                            >
-                              — {evidence.source_domain || evidence.source_title}
-                            </a>
-                          ) : (
-                            <span className="ml-1 text-ink-4">— {evidence.source_title}</span>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </MagazineSection>
-      )}
-
-      {/* V1-S1.2 议长选举详情（嵌入到顶部议会信息之下） */}
-      {summary.election && (
-        <MagazineSection
-          label="Election"
-          title="议长选举"
-          emptyHint="（未拿到选举数据）"
-        >
-          <ElectionDetail election={summary.election} />
-        </MagazineSection>
-      )}
-
-      {/* 共识区 */}
-      <MagazineSection
-        label="Consensus"
-        title="共识区"
-        emptyHint="本次议会没有达成明显共识"
-      >
-        {summary.consensus?.map((c, i) => (
-          <p key={i} className="text-ink leading-relaxed mb-3">
-            {c}
-          </p>
-        ))}
-      </MagazineSection>
-
-      {/* 分歧区 */}
-      <MagazineSection
-        label="Dissent"
-        title="分歧区"
-        emptyHint="本次议会无明显分歧"
-      >
-        {summary.dissent?.map((d, i) => (
-          <div key={i} className="mb-5">
-            <h3 className="font-serif text-lg font-medium text-ink mb-2">
-              {d.topic}
-            </h3>
-            <ul className="space-y-1 pl-4">
-              {Object.entries(d.sides || {}).map(([mid, stance]) => {
-                const m = getMember(mid);
-                return (
-                  <li
-                    key={mid}
-                    className="text-sm text-ink-secondary leading-relaxed"
-                  >
-                    <span
-                      className="font-medium"
-                      style={{ color: m?.color || "#374151" }}
-                    >
-                      {m?.display_name || mid}
-                    </span>
-                    <span className="text-ink-muted mx-1.5">——</span>
-                    {stance}
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        ))}
-      </MagazineSection>
-
-      {/* 盲区 */}
-      <MagazineSection
-        label="Blind Spots"
-        title="议长补的盲区"
-        emptyHint="议长未指出盲区"
-      >
-        {summary.blind_spots?.map((b, i) => (
-          <p key={i} className="text-ink leading-relaxed mb-3">
-            {b}
-          </p>
-        ))}
-      </MagazineSection>
-
-      {/* 综合建议：突出展示 */}
-      <section className="my-12 p-6 border-l-4 border-brand bg-bg-elev/50">
-        <div className="text-xs uppercase tracking-widest text-brand font-medium mb-3">
-          Advice · 综合建议
-        </div>
-        <p className="text-ink leading-relaxed whitespace-pre-wrap">
-          {summary.advice}
+        <p className="text-xl font-bold leading-relaxed text-[#2d2830] sm:text-2xl">
+          {recommendation || "建议先补充关键信息，再作最终决定。"}
         </p>
+        {summary.key_reason && (
+          <div className="mt-6 border-l-2 border-[#ec403d] pl-4">
+            <div className="text-xs font-bold tracking-wider text-[#a36b6a]">
+              最关键理由
+            </div>
+            <p className="mt-1.5 leading-7 text-[#554d56]">
+              {summary.key_reason}
+            </p>
+          </div>
+        )}
+        {nextAction && (
+          <div className="mt-6 rounded-xl bg-[#f5f1f3] px-4 py-3">
+            <span className="text-xs font-bold text-[#4b1c62]">下一步：</span>
+            <span className="ml-2 text-sm text-[#554d56]">{nextAction}</span>
+          </div>
+        )}
       </section>
 
-      {/* 未决问题 */}
-      <MagazineSection
-        label="Open Questions"
-        title="未决问题"
-        emptyHint="本次议会未留下未决问题"
-      >
-        {summary.open_questions?.map((q, i) => (
-          <p key={i} className="text-ink leading-relaxed mb-3">
-            {q}
-          </p>
-        ))}
-      </MagazineSection>
-
-      {/* V1-S1.4 用户在议会里说过的话 */}
-      {userMessages.length > 0 && (
-        <MagazineSection
-          label="User Inputs"
-          title="你在议会里说过的话"
-          emptyHint=""
-        >
-          {userMessages.map((m, i) => (
-            <p key={i} className="text-ink leading-relaxed mb-2 pl-3 border-l-2 border-me">
-              {m.content}
-            </p>
-          ))}
-        </MagazineSection>
+      {summary.member_stances && (
+        <Section eyebrow="Council Positions" title="专家最终倾向">
+          <MemberStanceBar stances={summary.member_stances} />
+        </Section>
       )}
 
-      {/* 底部返回 */}
-      <footer className="mt-16 pt-8 border-t border-edge text-center">
+      <Section
+        eyebrow="Consensus"
+        title="已经形成的共识"
+        emptyHint="本场会议尚未形成明确共识。"
+      >
+        <NumberedItems items={summary.consensus} />
+      </Section>
+
+      <Section
+        eyebrow="Dissent"
+        title="仍然存在的分歧"
+        emptyHint="本场会议没有保留明显分歧。"
+      >
+        <div className="space-y-6">
+          {summary.dissent?.map((item, index) => (
+            <div key={`${item.topic}-${index}`} className="border-l-2 border-[#cdbfc5] pl-4">
+              <h3 className="font-serif text-lg font-medium text-[#2d2830]">
+                {item.topic}
+              </h3>
+              <ul className="mt-2 space-y-2">
+                {Object.entries(item.sides || {}).map(([expertId, view]) => {
+                  const expert = getMember(expertId);
+                  return (
+                    <li key={expertId} className="text-sm leading-6 text-[#625a63]">
+                      <strong style={{ color: expert?.color }}>
+                        {expert?.display_name || expertId}
+                      </strong>
+                      <span className="mx-2 text-[#b2a8ae]">—</span>
+                      {view}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      {summary.decision_options && summary.decision_options.length > 0 && (
+        <Section eyebrow="Options" title="方案收益与代价">
+          <div className="grid gap-4 md:grid-cols-2">
+            {summary.decision_options.map((item) => (
+              <div key={item.option} className="rounded-xl border border-[#e2d9dc] bg-white p-4">
+                <h3 className="font-bold text-[#352f36]">{item.option}</h3>
+                <TradeoffList label="可能收益" items={item.benefits} />
+                <TradeoffList label="主要代价" items={item.costs} />
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {summary.analysis_basis && (
+        <Section eyebrow="Analysis Basis" title="分析依据">
+          <p className="mb-4 text-sm leading-6 text-[#766d75]">
+            {summary.basis_assessment?.description ||
+              `已整理 ${summary.basis_assessment?.verified_count || 0} 项可核实信息。`}
+          </p>
+          <div className="space-y-3">
+            <EvidenceGroup title="用户提供的信息" items={summary.analysis_basis.user_facts} />
+            <EvidenceGroup title="网页信息来源" items={summary.analysis_basis.web_sources} />
+            <EvidenceGroup title="计算结果" items={summary.analysis_basis.calculations} />
+            <EvidenceGroup title="推断假设" items={summary.analysis_basis.inferences} />
+          </div>
+        </Section>
+      )}
+
+      <Section
+        eyebrow="Next Actions"
+        title="建议你接下来做什么"
+        emptyHint="本场会议没有留下额外行动。"
+      >
+        <NumberedItems items={summary.next_actions || summary.open_questions} />
+      </Section>
+
+      <Section
+        eyebrow="Reversal Conditions"
+        title="什么情况会改变这个结论"
+        emptyHint="暂未识别明确的结论翻转条件。"
+      >
+        <NumberedItems items={summary.reversal_conditions} />
+      </Section>
+
+      {userMessages.length > 0 && (
+        <Section eyebrow="User Inputs" title="你在会议中补充的信息">
+          <div className="space-y-2">
+            {userMessages.map((message, index) => (
+              <p
+                key={`${message.content}-${index}`}
+                className="border-l-2 border-[#ec403d] pl-3 leading-7 text-[#625a63]"
+              >
+                {message.content}
+              </p>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      <footer className="mt-14 border-t border-[#ded5d9] pt-8 text-center">
+        <p className="mb-5 text-xs leading-5 text-[#928991]">
+          这是辅助决策建议。最终选择仍应由你结合自身情况作出。
+        </p>
         <button
           onClick={() => window.location.assign("/")}
-          className="px-6 py-2 border border-edge-strong text-ink-secondary hover:border-brand hover:text-brand transition text-sm"
+          className="rounded-lg border border-[#a99ca4] px-6 py-2.5 text-sm font-bold text-[#554d56] transition hover:border-[#4b1c62] hover:text-[#4b1c62]"
         >
           ← 发起新议会
         </button>
@@ -266,80 +205,140 @@ export function SummaryPanel({
   );
 }
 
-/**
- * V1-S1.4：议员最终立场分布（5 色块 + 紧凑计数）
- */
+function Section({
+  eyebrow,
+  title,
+  emptyHint,
+  children,
+}: {
+  eyebrow: string;
+  title: string;
+  emptyHint?: string;
+  children: React.ReactNode;
+}) {
+  const empty =
+    children === undefined ||
+    children === null ||
+    (Array.isArray(children) && children.length === 0);
+  return (
+    <section className="mb-12">
+      <div className="mb-5">
+        <div className="mb-1 text-xs font-bold uppercase tracking-[0.14em] text-[#a36b6a]">
+          {eyebrow}
+        </div>
+        <h2 className="font-serif text-2xl font-medium text-[#2d2830]">{title}</h2>
+      </div>
+      {empty ? (
+        <p className="text-sm italic text-[#928991]">{emptyHint}</p>
+      ) : (
+        children
+      )}
+    </section>
+  );
+}
+
+function NumberedItems({ items = [] }: { items?: string[] }) {
+  return (
+    <ol className="space-y-3">
+      {items.map((item, index) => (
+        <li key={`${item}-${index}`} className="flex gap-3 leading-7 text-[#554d56]">
+          <span className="mt-1 grid h-6 w-6 flex-none place-items-center rounded-full bg-[#f0e9ed] text-xs font-bold text-[#6f4878]">
+            {index + 1}
+          </span>
+          <span>{item}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function TradeoffList({ label, items }: { label: string; items: string[] }) {
+  if (!items?.length) return null;
+  return (
+    <div className="mt-4">
+      <div className="text-xs font-bold text-[#8d6674]">{label}</div>
+      <ul className="mt-1.5 space-y-1 text-sm leading-6 text-[#625a63]">
+        {items.map((item) => (
+          <li key={item}>· {item}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function EvidenceGroup({
+  title,
+  items,
+}: {
+  title: string;
+  items: SummaryEvidence[];
+}) {
+  if (!items?.length) return null;
+  return (
+    <details className="group rounded-xl border border-[#e2d9dc] bg-white">
+      <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-bold text-[#554d56]">
+        <span>{title}</span>
+        <span className="text-xs font-normal text-[#968b92]">
+          {items.length}项 <span className="ml-1 group-open:hidden">＋</span>
+          <span className="ml-1 hidden group-open:inline">－</span>
+        </span>
+      </summary>
+      <ul className="space-y-3 border-t border-[#eee8eb] px-4 py-4">
+        {items.map((item) => (
+          <li key={item.evidence_id} className="text-sm leading-6 text-[#625a63]">
+            <p>{item.content}</p>
+            {item.calculation_formula && (
+              <p className="mt-1 rounded bg-[#f5f1f3] px-2 py-1 font-mono text-xs text-[#675d67]">
+                {item.calculation_formula}
+              </p>
+            )}
+            {item.source_url && (
+              <a
+                href={item.source_url}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-1 inline-block text-xs font-bold text-[#6f4878] hover:underline"
+              >
+                {item.source_title || item.source_domain || "查看来源"} ↗
+              </a>
+            )}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 function MemberStanceBar({
   stances,
 }: {
   stances: Record<string, { stance: Stance; confidence: number }>;
 }) {
+  const labels: Record<Stance, string> = {
+    for: "支持",
+    against: "反对",
+    neutral: "暂缓 / 条件判断",
+  };
   return (
-    <div className="mt-5 pt-4 border-t border-edge">
-      <div className="text-xs uppercase tracking-widest text-ink-subtle mb-2">
-        议员立场分布
-      </div>
-      <div className="flex items-center gap-3 flex-wrap text-xs">
-        {(["for", "against", "neutral"] as Stance[]).map((s) => {
-          const members = Object.entries(stances).filter(
-            ([, info]) => info.stance === s
-          );
-          if (members.length === 0) return null;
-          const map = {
-            for: { label: "支持", cls: "text-stance-forText" },
-            against: { label: "反对", cls: "text-stance-againstText" },
-            neutral: { label: "中立", cls: "text-stance-neutralText" },
-          }[s];
-          return (
-            <div key={s} className="flex items-center gap-1.5">
-              <span className={`font-medium ${map.cls}`}>{map.label}</span>
-              <span className="text-ink-3">{members.length}</span>
-              <span className="text-ink-3">·</span>
-              {members.map(([mid], i) => {
-                const m = getMember(mid);
-                if (!m) return null;
-                return (
-                  <span key={mid} style={{ color: m.color }}>
-                    {m.display_name}
-                    {i < members.length - 1 ? " " : ""}
-                  </span>
-                );
-              })}
-            </div>
-          );
-        })}
-      </div>
+    <div className="flex flex-wrap gap-3">
+      {Object.entries(stances).map(([expertId, info]) => {
+        const expert = getMember(expertId);
+        return (
+          <div
+            key={expertId}
+            className="flex items-center gap-2 rounded-full border border-[#e2d9dc] bg-white px-3 py-2 text-xs"
+          >
+            <span
+              className="h-2.5 w-2.5 rounded-full"
+              style={{ backgroundColor: expert?.color || "#8b838b" }}
+            />
+            <strong style={{ color: expert?.color }}>
+              {expert?.display_name || expertId}
+            </strong>
+            <span className="text-[#817780]">{labels[info.stance]}</span>
+          </div>
+        );
+      })}
     </div>
-  );
-}
-
-function MagazineSection({
-  label,
-  title,
-  emptyHint,
-  children,
-}: {
-  label: string;
-  title: string;
-  emptyHint: string;
-  children: React.ReactNode;
-}) {
-  const childArray = Array.isArray(children) ? children : [children];
-  const hasContent = childArray.filter(Boolean).length > 0;
-
-  return (
-    <section className="mb-12">
-      <div className="mb-4">
-        <div className="text-xs uppercase tracking-widest text-ink-subtle mb-1">
-          {label}
-        </div>
-        <h2 className="font-serif text-2xl font-medium text-ink">{title}</h2>
-      </div>
-      {hasContent ? (
-        <div>{children}</div>
-      ) : (
-        <p className="text-ink-muted italic text-sm">{emptyHint}</p>
-      )}
-    </section>
   );
 }

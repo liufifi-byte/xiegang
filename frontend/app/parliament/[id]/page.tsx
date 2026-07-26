@@ -255,9 +255,11 @@ export default function ParliamentPage() {
             parse_topic: "claimed",
             select_experts: "researching",
             research: "researching",
-            select_divergent: "cross_examining",
-            cross_examination: "cross_examining",
-            select_chair: "summarizing",
+            opening_round: "cross_examining",
+            extract_disputes: "cross_examining",
+            cross_examination_round: "cross_examining",
+            assess_third_round: "cross_examining",
+            convergence_round: "cross_examining",
             summary: "summarizing",
           };
           if (node && phaseByNode[node]) setServerPhase(phaseByNode[node]);
@@ -311,7 +313,11 @@ export default function ParliamentPage() {
 
             // 阶段切换：从调研(R0)进入 R1 → 系统消息
             if (
-              (node === "debate" || node === "cross_examination") &&
+              (
+                node === "opening_round" ||
+                node === "cross_examination_round" ||
+                node === "convergence_round"
+              ) &&
               payload.current_round > prevRound
             ) {
               setMemberStatus((prev) =>
@@ -435,9 +441,11 @@ export default function ParliamentPage() {
 
   const phaseTitle = {
     understanding: "正在理解你的问题",
-    research: "专家正在形成第一轮判断",
-    debate: "三位专家正在交叉回应",
-    summary: "主席正在整理议会结论",
+    research: "专家正在独立判断并核实事实",
+    debate: currentRound > 0
+      ? `专家正在进行第 ${Math.min(currentRound + 1, 3)} 轮讨论`
+      : "专家正在形成核心争议",
+    summary: "中立主持人正在形成会议结论",
   }[phase];
 
   // 完成时跳转到独立 summary 路由
@@ -581,12 +589,22 @@ export default function ParliamentPage() {
         >
           <SystemMessage text={`你已加入「${topic || "本次议会"}」`} />
 
-          <AgentResearchTimeline
-            traces={agentTraces}
-            expertIds={selectedExpertIds}
-            activeMember={activeMember}
-            statuses={memberStatus}
-          />
+          {agentTraces.length > 0 && (
+            <details className="mx-4 mb-4 rounded-xl border border-[#e4dce0] bg-white/70">
+              <summary className="cursor-pointer px-4 py-3 text-xs font-bold text-[#6f6470]">
+                Agent 运行记录
+                <span className="ml-2 font-normal text-[#9b9199]">
+                  技术展示，默认收起
+                </span>
+              </summary>
+              <AgentResearchTimeline
+                traces={agentTraces}
+                expertIds={selectedExpertIds}
+                activeMember={activeMember}
+                statuses={memberStatus}
+              />
+            </details>
+          )}
 
           {status === "connecting" && (
             <div className="mx-4 my-4 rounded-xl border border-[#eadfd9] bg-[#fffaf6] px-4 py-3 text-xs leading-5 text-[#71666e]">

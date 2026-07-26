@@ -57,7 +57,12 @@ export function ChatMessage({ entry }: Props) {
           </span>
           {entry.round !== undefined && (
             <span className="text-xs text-ink-subtle">
-              R{entry.round}
+              {entry.round === 0 ? "独立判断" : `第 ${entry.round} 轮`}
+            </span>
+          )}
+          {entry.duty && (
+            <span className="rounded bg-[#f2edf0] px-1.5 py-0.5 text-[10px] text-[#746a72]">
+              {entry.duty}
             </span>
           )}
           <span className="text-xs text-ink-subtle">{time}</span>
@@ -82,7 +87,7 @@ export function ChatMessage({ entry }: Props) {
               onClick={() => setExpanded(!expanded)}
               className="mt-2 text-xs text-ink-muted hover:text-brand transition flex items-center gap-1"
             >
-              {expanded ? "▾ 收起证据" : `▸ 展开 ${evidenceLen} 条证据`}
+              {expanded ? "▾ 收起分析依据" : `▸ 查看 ${evidenceLen} 项分析依据`}
             </button>
           )}
 
@@ -108,8 +113,8 @@ export function ChatMessage({ entry }: Props) {
           )}
         </div>
 
-        {/* meta：立场 + 置信度 */}
-        {(stance || entry.confidence !== undefined) && (
+        {/* meta：只展示倾向与判断基础，不展示模型自报置信度 */}
+        {(stance || entry.basis_level) && (
           <div className="flex items-center gap-2 mt-1.5 text-xs">
             {stance && (
               <span
@@ -118,9 +123,13 @@ export function ChatMessage({ entry }: Props) {
                 {stance.label}
               </span>
             )}
-            {entry.confidence !== undefined && (
+            {entry.basis_level && (
               <span className="text-ink-subtle">
-                置信 {(entry.confidence * 100).toFixed(0)}%
+                {{
+                  limited: "判断基础有限",
+                  moderate: "判断基础一般",
+                  strong: "判断基础较强",
+                }[entry.basis_level]}
               </span>
             )}
           </div>
@@ -131,6 +140,5 @@ export function ChatMessage({ entry }: Props) {
 }
 
 function formatTime(round?: number): string {
-  // MVP：用 round 当假时间戳。后端 archive 真实时间。
-  return round === 0 ? "调研阶段" : `第 ${round} 轮`;
+  return round === 0 ? "独立判断" : `第 ${round} 轮`;
 }

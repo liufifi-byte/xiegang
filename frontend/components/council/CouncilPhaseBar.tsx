@@ -2,9 +2,9 @@ export type CouncilPhase = "understanding" | "research" | "debate" | "summary";
 
 const PHASES: Array<{ id: CouncilPhase; label: string }> = [
   { id: "understanding", label: "理解问题" },
-  { id: "research", label: "自主调研" },
-  { id: "debate", label: "观点交锋" },
-  { id: "summary", label: "主席总结" },
+  { id: "research", label: "核实事实" },
+  { id: "debate", label: "2–3轮讨论" },
+  { id: "summary", label: "中立总结" },
 ];
 
 export function CouncilPhaseBar({ phase }: { phase: CouncilPhase }) {

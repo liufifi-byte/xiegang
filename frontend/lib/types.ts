@@ -8,6 +8,18 @@ export type ExpertId =
 export type LegacyMemberId = "suan" | "chen" | "ji" | "nian" | "fan";
 export type MemberId = ExpertId | LegacyMemberId;
 export type Stance = "for" | "against" | "neutral";
+export type DecisionPosition =
+  | "support"
+  | "oppose"
+  | "defer"
+  | "conditional_support"
+  | "undetermined";
+export type BasisLevel = "limited" | "moderate" | "strong";
+export type EvidenceKind =
+  | "user_fact"
+  | "web_source"
+  | "calculation"
+  | "inference";
 
 export interface Member {
   id: MemberId;
@@ -94,6 +106,14 @@ export interface Evidence {
   source: string;
   strength: "high" | "medium" | "low";
   evidence_id?: string;
+  kind?: EvidenceKind;
+  source_title?: string;
+  source_url?: string | null;
+  source_domain?: string;
+  supports_claim?: string;
+  calculation_inputs?: Record<string, unknown>;
+  calculation_formula?: string | null;
+  assumptions?: string[];
 }
 
 export type AgentTracePhase =
@@ -141,6 +161,10 @@ export interface TranscriptEntry {
   content: string;
   evidence?: Evidence[];
   confidence?: number;
+  position?: DecisionPosition;
+  basis_level?: BasisLevel;
+  duty?: string;
+  reply_to?: string;
   /** 群聊时间戳（前端渲染用，后端可选填） */
   timestamp?: string;
 }
@@ -211,6 +235,59 @@ export interface ParliamentSummary {
   >;
   research_degraded?: boolean;
   research_error?: string | null;
+  recommendation?: string;
+  recommendation_strength?: "conditional" | "clear" | "insufficient";
+  key_reason?: string;
+  decision_options?: Array<{
+    option: string;
+    benefits: string[];
+    costs: string[];
+  }>;
+  assumptions?: string[];
+  next_actions?: string[];
+  reversal_conditions?: string[];
+  round_count?: number;
+  member_positions?: Array<{
+    expert_id: string;
+    stance: Stance;
+    position?: DecisionPosition | null;
+    basis_level?: BasisLevel;
+  }>;
+  core_disputes?: Array<{
+    dispute_id: string;
+    question: string;
+    kind?: string;
+    participants?: string[];
+    status?: string;
+    pressure_test?: boolean;
+  }>;
+  basis_assessment?: {
+    level: BasisLevel;
+    verified_count: number;
+    important_unknown_count: number;
+    description?: string;
+  };
+  analysis_basis?: {
+    user_facts: SummaryEvidence[];
+    web_sources: SummaryEvidence[];
+    calculations: SummaryEvidence[];
+    inferences: SummaryEvidence[];
+  };
+}
+
+export interface SummaryEvidence {
+  evidence_id: string;
+  content: string;
+  supports_claim?: string;
+  source_title?: string;
+  source_url?: string | null;
+  source_domain?: string;
+  published_at?: string | null;
+  freshness_note?: string | null;
+  calculation_inputs?: Record<string, unknown>;
+  calculation_formula?: string | null;
+  assumptions?: string[];
+  expert_id?: string;
 }
 
 export type MemberStatus =
