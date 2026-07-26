@@ -15,12 +15,17 @@ class ParliamentState(TypedDict):
     # === 主调度分解 ===
     briefing: dict[str, Any]      # {key_variables: [...], summary: "..."}
     category: str | None          # 'real_estate'|'gold'|...|'general'
+    decision_model: dict[str, Any]
+    evidence_pool: list[dict[str, Any]]
 
     # === 本场职业专家 ===
     selected_expert_ids: list[str]
     expert_selection_reasons: dict[str, str]
     debate_duties: dict[str, str]
     divergent_expert_ids: list[str]
+    core_disputes: list[dict[str, Any]]
+    round_decisions: list[dict[str, Any]]
+    basis_assessment: dict[str, Any]
     agent_results: dict[str, dict]
     agent_traces: list[dict]
     research_degraded: bool
@@ -66,10 +71,26 @@ def make_initial_state(
         "user_background": user_background,
         "briefing": {},
         "category": None,
+        "decision_model": {
+            "question": topic,
+            "options": [],
+            "user_facts": [],
+            "preferences": [],
+            "unknowns": [],
+            "research_questions": [],
+        },
+        "evidence_pool": [],
         "selected_expert_ids": list(selected_expert_ids or []),
         "expert_selection_reasons": {},
         "debate_duties": {},
         "divergent_expert_ids": [],
+        "core_disputes": [],
+        "round_decisions": [],
+        "basis_assessment": {
+            "level": "limited",
+            "verified_count": 0,
+            "important_unknown_count": 0,
+        },
         "agent_results": {},
         "agent_traces": [],
         "research_degraded": False,

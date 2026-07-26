@@ -8,6 +8,7 @@ def test_make_initial_state_has_all_fields():
     required_keys = {
         "topic", "user_id", "topic_category", "user_background",
         "briefing", "category", "members",
+        "decision_model", "evidence_pool",
         "current_round", "max_rounds", "tension_score",
         "transcript", "tool_calls", "election_result", "summary",
         "user_interrupt", "interrupt_pending",
@@ -15,6 +16,7 @@ def test_make_initial_state_has_all_fields():
         "selected_expert_ids", "expert_selection_reasons",
         "debate_duties",
         "divergent_expert_ids",
+        "core_disputes", "round_decisions", "basis_assessment",
         "agent_results", "agent_traces",
         "research_degraded", "research_error",
     }
@@ -29,6 +31,9 @@ def test_make_initial_state_defaults():
     assert state["transcript"] == []
     assert state["election_result"] is None
     assert state["summary"] is None
+    assert state["decision_model"]["question"] == "test"
+    assert state["evidence_pool"] == []
+    assert state["core_disputes"] == []
 
 
 def test_state_can_be_assigned_as_typeddict():

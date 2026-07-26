@@ -234,6 +234,24 @@ class AgentHarness:
         reason = result.degradation_reason
         if degradation_reasons:
             reason = "；".join(degradation_reasons)
+        records = [record for record in self.ledger.records if record.evidence_id in known_refs]
+        auditable_count = sum(
+            record.kind in {"web_source", "calculation", "user_fact"}
+            for record in records
+        )
+        if auditable_count >= 2 and not result.degraded:
+            basis_level = "strong"
+        elif auditable_count >= 1:
+            basis_level = "moderate"
+        else:
+            basis_level = "limited"
+        position = result.position
+        if position == "undetermined":
+            position = {
+                "for": "support",
+                "against": "oppose",
+                "neutral": "defer",
+            }[result.stance]
         return result.model_copy(
             update={
                 "agent_id": self.profile.expert_id,
@@ -242,6 +260,8 @@ class AgentHarness:
                 "degraded": degraded,
                 "degradation_reason": reason if degraded else None,
                 "confidence": min(result.confidence, 0.6) if degraded else result.confidence,
+                "position": position,
+                "basis_level": basis_level,
             }
         )
 

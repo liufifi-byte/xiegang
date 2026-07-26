@@ -8,6 +8,15 @@ from pydantic import BaseModel, Field, model_validator
 
 
 AgentAction = Literal["tool", "finish"]
+EvidenceKind = Literal["user_fact", "web_source", "calculation", "inference"]
+BasisLevel = Literal["limited", "moderate", "strong"]
+DecisionPosition = Literal[
+    "support",
+    "oppose",
+    "defer",
+    "conditional_support",
+    "undetermined",
+]
 AgentStatus = Literal[
     "idle",
     "running",
@@ -48,6 +57,7 @@ class ToolResultItem(BaseModel):
     url: str | None = None
     content: str
     score: float | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolObservation(BaseModel):
@@ -74,13 +84,34 @@ class EvidenceRecord(BaseModel):
     relevance: float = Field(default=0.5, ge=0.0, le=1.0)
     reliability: float = Field(default=0.5, ge=0.0, le=1.0)
     strength: Literal["high", "medium", "low"] = "medium"
+    kind: EvidenceKind = "inference"
+    supports_claim: str = ""
+    published_at: str | None = None
+    freshness_note: str | None = None
+    calculation_inputs: dict[str, Any] = Field(default_factory=dict)
+    calculation_formula: str | None = None
+    assumptions: list[str] = Field(default_factory=list, max_length=5)
+
+    @model_validator(mode="after")
+    def kind_requires_auditable_fields(self) -> "EvidenceRecord":
+        if self.kind == "web_source" and not self.source_url:
+            raise ValueError("web_source evidence requires source_url")
+        if self.kind == "calculation":
+            if not self.calculation_inputs or not self.calculation_formula:
+                raise ValueError(
+                    "calculation evidence requires calculation_inputs and calculation_formula"
+                )
+        return self
 
 
 class ExpertResearchResult(BaseModel):
     agent_id: str
     stance: Literal["for", "against", "neutral"]
     confidence: float = Field(ge=0.0, le=1.0)
+    position: DecisionPosition = "undetermined"
+    basis_level: BasisLevel = "limited"
     thesis: str = Field(min_length=1)
+    key_risks: list[str] = Field(default_factory=list, max_length=5)
     evidence_refs: list[str] = Field(default_factory=list, max_length=3)
     assumptions: list[str] = Field(default_factory=list, max_length=5)
     unknowns: list[str] = Field(default_factory=list, max_length=5)

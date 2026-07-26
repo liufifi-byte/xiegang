@@ -30,9 +30,21 @@ class EvidenceLedger:
             evidence_id = "ev_" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
             if evidence_id in self._records:
                 continue
+            if observation.tool_name == "web_search" and not item.url:
+                # A search snippet without an inspectable source is not web evidence.
+                continue
+            kind = {
+                "web_search": "web_source",
+                "calculator": "calculation",
+                "memory_search": "user_fact",
+            }.get(observation.tool_name, "inference")
             domain = urlparse(item.url).netloc if item.url else ""
             strength = "low"
-            if item.url and (item.score or 0) >= 0.75:
+            if observation.tool_name == "calculator":
+                strength = "high"
+            elif observation.tool_name == "memory_search":
+                strength = "medium"
+            elif item.url and (item.score or 0) >= 0.75:
                 strength = "high"
             elif item.url:
                 strength = "medium"
@@ -49,6 +61,11 @@ class EvidenceLedger:
                 relevance=max(0.0, min(1.0, item.score or 0.5)),
                 reliability=0.65 if item.url else 0.3,
                 strength=strength,
+                kind=kind,
+                supports_claim=item.content[:180],
+                calculation_inputs=item.metadata.get("inputs", {}),
+                calculation_formula=item.metadata.get("formula"),
+                assumptions=list(item.metadata.get("assumptions", []))[:5],
             )
             self._records[evidence_id] = record
             added.append(record)

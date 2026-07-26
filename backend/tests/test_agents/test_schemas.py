@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from app.agents.schemas import (
     AgentDecision,
     AgentTraceEvent,
+    EvidenceRecord,
     ExpertResearchResult,
     ToolRequest,
 )
@@ -91,3 +92,29 @@ def test_trace_event_is_json_serializable():
         timestamp=1.0,
     )
     assert '"agent_id":"economist"' in event.model_dump_json()
+
+
+def test_web_evidence_requires_openable_source():
+    with pytest.raises(ValidationError, match="requires source_url"):
+        EvidenceRecord(
+            evidence_id="ev_web",
+            agent_id="economist",
+            tool_call_id="tool_1",
+            claim_summary="房贷利率发生变化",
+            source_title="搜索摘要",
+            retrieved_at=1.0,
+            kind="web_source",
+        )
+
+
+def test_calculation_evidence_requires_inputs_and_formula():
+    with pytest.raises(ValidationError, match="calculation evidence"):
+        EvidenceRecord(
+            evidence_id="ev_calc",
+            agent_id="mathematician",
+            tool_call_id="tool_2",
+            claim_summary="月供约一万元",
+            source_title="安全计算结果",
+            retrieved_at=1.0,
+            kind="calculation",
+        )

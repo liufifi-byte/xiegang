@@ -94,6 +94,11 @@ async def _calculator_handler(args: BaseModel, _: ToolContext) -> list[ToolResul
             title="安全计算结果",
             content=f"{parsed.expression} = {value}",
             score=1.0,
+            metadata={
+                "inputs": parsed.variables,
+                "formula": parsed.expression,
+                "result": value,
+            },
         )
     ]
 
@@ -108,7 +113,14 @@ async def _memory_search_handler(args: BaseModel, context: ToolContext) -> list[
         limit=parsed.limit,
         user_id=context.user_id,
     )
-    return [ToolResultItem(title="相关历史决策", content=content, score=0.7)]
+    return [
+        ToolResultItem(
+            title="用户提供的相关历史决策",
+            content=content,
+            score=0.7,
+            metadata={"source_kind": "user_fact"},
+        )
+    ]
 
 
 class ToolRegistry:
