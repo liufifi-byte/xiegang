@@ -45,6 +45,9 @@ export default function ParliamentPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [workerAvailable, setWorkerAvailable] = useState(true);
   const [serverPhase, setServerPhase] = useState<string>("queued");
+  const [coreDisputes, setCoreDisputes] = useState<
+    NonNullable<ParliamentSummary["core_disputes"]>
+  >([]);
 
   // 用户选中的议员（右侧详情抽屉）
   const [activeMember, setActiveMember] = useState<MemberId | null>(null);
@@ -301,6 +304,13 @@ export default function ParliamentPage() {
 
           if (payload.transcript) {
             setTranscript(payload.transcript as TranscriptEntry[]);
+          }
+          if (Array.isArray(payload.core_disputes)) {
+            setCoreDisputes(
+              payload.core_disputes as NonNullable<
+                ParliamentSummary["core_disputes"]
+              >
+            );
           }
           // V1-S4 接收工具调用轨迹
           if (payload.tool_calls) {
@@ -589,6 +599,10 @@ export default function ParliamentPage() {
         >
           <SystemMessage text={`你已加入「${topic || "本次议会"}」`} />
 
+          {coreDisputes.length > 0 && (
+            <CoreDisputePanel disputes={coreDisputes} />
+          )}
+
           {agentTraces.length > 0 && (
             <details className="mx-4 mb-4 rounded-xl border border-[#e4dce0] bg-white/70">
               <summary className="cursor-pointer px-4 py-3 text-xs font-bold text-[#6f6470]">
@@ -745,9 +759,9 @@ function MemberDetailDrawer({
                 {
                   {
                     idle: "待命中",
-                    thinking: "正在判断信息缺口...",
-                    using_tool: "正在自主查证...",
-                    organizing: "正在整理证据...",
+                    thinking: "正在形成独立判断...",
+                    using_tool: "正在核实关键事实...",
+                    organizing: "正在整理分析依据...",
                     speaking: "正在发言...",
                     done: "已完成本轮",
                     degraded: "基于有限信息完成",
@@ -868,5 +882,47 @@ function MemberDetailDrawer({
         </div>
       </div>
     </div>
+  );
+}
+
+function CoreDisputePanel({
+  disputes,
+}: {
+  disputes: NonNullable<ParliamentSummary["core_disputes"]>;
+}) {
+  return (
+    <section className="mx-4 mb-4 rounded-2xl border border-[#dfd3d8] bg-[#fffdfb] p-4 shadow-[0_10px_28px_rgba(62,36,57,0.05)]">
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#a36b6a]">
+            Core Disputes
+          </p>
+          <h2 className="mt-0.5 text-sm font-bold text-[#3a323a]">
+            本场正在解决的核心争议
+          </h2>
+        </div>
+        <span className="rounded-full bg-[#f1ebee] px-2.5 py-1 text-[10px] font-bold text-[#736871]">
+          {disputes.length} 项
+        </span>
+      </div>
+      <ol className="space-y-2">
+        {disputes.map((dispute, index) => (
+          <li
+            key={dispute.dispute_id}
+            className="flex gap-2.5 rounded-xl bg-[#f7f3f5] px-3 py-2.5 text-xs leading-5 text-[#5f5660]"
+          >
+            <span className="grid h-5 w-5 flex-none place-items-center rounded-full bg-white font-bold text-[#6f4878]">
+              {index + 1}
+            </span>
+            <span className="flex-1">{dispute.question}</span>
+            {dispute.pressure_test && (
+              <span className="self-start whitespace-nowrap rounded bg-[#fff0ed] px-1.5 py-0.5 text-[10px] font-bold text-[#a35a56]">
+                共识压力测试
+              </span>
+            )}
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
