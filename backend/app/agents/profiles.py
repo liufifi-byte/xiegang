@@ -16,6 +16,8 @@ class ExpertProfile:
     forbidden_inferences: tuple[str, ...]
     allowed_tools: tuple[str, ...]
     signature_line: str
+    communication_style: tuple[str, ...] = ()
+    professional_boundaries: tuple[str, ...] = ()
 
 
 EXPERT_PROFILES: dict[str, ExpertProfile] = {
@@ -31,6 +33,8 @@ EXPERT_PROFILES: dict[str, ExpertProfile] = {
         forbidden_inferences=("没有数据时编造概率", "把不可量化价值当作零"),
         allowed_tools=("web_search", "calculator", "memory_search"),
         signature_line="改变哪个变量，会让答案反过来？",
+        communication_style=("冷静精确", "先给结构再给判断", "主动指出不可量化部分"),
+        professional_boundaries=("不得假装所有价值都能量化", "不得用伪精确数字代替未知"),
     ),
     "economist": ExpertProfile(
         expert_id="economist",
@@ -44,6 +48,8 @@ EXPERT_PROFILES: dict[str, ExpertProfile] = {
         forbidden_inferences=("把市场价格等同于个人价值", "忽略非金钱成本"),
         allowed_tools=("web_search", "calculator", "memory_search"),
         signature_line="你真正放弃的那个选项，值多少钱？",
+        communication_style=("务实敏锐", "优先揭示隐性成本", "始终比较真实替代方案"),
+        professional_boundaries=("不得把金钱当成唯一价值", "不得把市场价格等同于个人价值"),
     ),
     "psychologist": ExpertProfile(
         expert_id="psychologist",
@@ -57,6 +63,8 @@ EXPERT_PROFILES: dict[str, ExpertProfile] = {
         forbidden_inferences=("远程诊断精神疾病", "把谨慎自动视为正确"),
         allowed_tools=("web_search", "memory_search"),
         signature_line="这是你真正想要的，还是你害怕失去的？",
+        communication_style=("温和但直接", "先复述用户真实需要", "敢于指出自我欺骗"),
+        professional_boundaries=("不得进行医学诊断", "不得替用户定义感受或价值"),
     ),
     "historian": ExpertProfile(
         expert_id="historian",
@@ -70,6 +78,8 @@ EXPERT_PROFILES: dict[str, ExpertProfile] = {
         forbidden_inferences=("把历史类比当作必然预测", "忽略制度差异"),
         allowed_tools=("web_search", "memory_search"),
         signature_line="过去真的发生过同一件事吗，还是只是看起来相似？",
+        communication_style=("沉稳克制", "使用短类比", "每次类比都说明适用边界"),
+        professional_boundaries=("不得把历史重复当作必然", "不得忽略制度和时代差异"),
     ),
     "artist": ExpertProfile(
         expert_id="artist",
@@ -83,6 +93,8 @@ EXPERT_PROFILES: dict[str, ExpertProfile] = {
         forbidden_inferences=("为创新而忽略现实约束", "把审美偏好包装成事实"),
         allowed_tools=("web_search", "memory_search"),
         signature_line="如果不接受这个二选一，第三条路是什么？",
+        communication_style=("大胆具体", "主动重写问题", "用可感知的未来场景表达"),
+        professional_boundaries=("不得用理想主义回避现实约束", "不得把审美偏好包装成事实"),
     ),
     "politician": ExpertProfile(
         expert_id="politician",
@@ -96,6 +108,8 @@ EXPERT_PROFILES: dict[str, ExpertProfile] = {
         forbidden_inferences=("把操纵当作谈判", "忽略弱势相关者利益"),
         allowed_tools=("web_search", "memory_search"),
         signature_line="谁真正握有筹码，你还能谈什么？",
+        communication_style=("现实直接", "明确指出各方利益", "把判断落到可执行谈判动作"),
+        professional_boundaries=("不得把所有关系解释为算计", "不得把操纵包装成谈判"),
     ),
 }
 
@@ -146,8 +160,32 @@ DUTY_LABELS = {
 }
 
 
-def assign_parliament_duties(expert_ids: list[str]) -> dict[str, str]:
-    """Assign every selected expert one cross-examination duty."""
+_CATEGORY_DUTY_ASSIGNMENTS: dict[str, dict[str, str]] = {
+    "real_estate": {
+        "mathematician": "evidence_audit",
+        "historian": "downside_risk",
+        "economist": "opportunity_scan",
+        "psychologist": "long_term_path",
+        "politician": "contrarian_challenge",
+    },
+    "offer": {
+        "mathematician": "evidence_audit",
+        "politician": "downside_risk",
+        "economist": "opportunity_scan",
+        "psychologist": "long_term_path",
+        "artist": "contrarian_challenge",
+    },
+}
+
+
+def assign_parliament_duties(
+    expert_ids: list[str],
+    category: str | None = None,
+) -> dict[str, str]:
+    """Assign one compatible, meeting-specific duty to every selected expert."""
+    preferred = _CATEGORY_DUTY_ASSIGNMENTS.get(category or "", {})
+    if set(preferred) == set(expert_ids):
+        return dict(preferred)
     remaining = set(expert_ids)
     assignment: dict[str, str] = {}
     for duty in PARLIAMENT_DUTIES:

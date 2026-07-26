@@ -86,11 +86,14 @@ def build_reason_prompt(
 ## 专业方法
 {'; '.join(profile.analysis_methods)}
 
+## 表达方式
+{'; '.join(profile.communication_style)}
+
 ## 必须检查
 {'; '.join(profile.required_questions)}
 
-## 禁止
-{'; '.join(profile.forbidden_inferences)}
+## 专业边界
+{'; '.join(profile.forbidden_inferences + profile.professional_boundaries)}
 
 ## 已有观察
 {json.dumps(observations[-2:], ensure_ascii=False)}
@@ -103,6 +106,8 @@ Reason: {max(0, harness.budget.max_reason_steps - harness.budget.reason_steps_us
 Tools: {max(0, harness.budget.max_tool_calls - harness.budget.tool_calls_used)}
 
 只做下一步决定，不输出思维链。外部事实只能通过 evidence_refs 引用证据账本中的 ID。
+没有可核验证据时，把相关内容写入 assumptions，不得生成精确市场数据、最新数据或历史统计。
+你可以不给出确定的支持或反对，但必须给出清晰的条件判断和结论反转条件。
 如果需要外部事实、计算或用户历史，选择一个允许的工具并自行生成参数。
 如果信息已经足够，返回 action=finish 和完整结果。
 最终结果必须包含至少一个 reversal_conditions。

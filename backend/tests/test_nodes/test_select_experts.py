@@ -23,6 +23,13 @@ def test_selector_returns_five_unique_known_experts():
         "long_term_path",
         "contrarian_challenge",
     }
+    assert result["debate_duties"] == {
+        "mathematician": "evidence_audit",
+        "historian": "downside_risk",
+        "economist": "opportunity_scan",
+        "psychologist": "long_term_path",
+        "politician": "contrarian_challenge",
+    }
 
 
 def test_offer_uses_stable_default_professional_roster():

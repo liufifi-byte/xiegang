@@ -78,12 +78,16 @@ def _general_roster(topic: str, variables: list[str]) -> tuple[str, ...]:
 
 
 def select_experts(state: dict) -> dict:
+    category = state.get("category") or state.get("topic_category") or "general"
     confirmed = state.get("selected_expert_ids") or []
     if confirmed:
         from app.services.expert_selection import selection_state
 
-        return selection_state(list(confirmed))
-    category = state.get("category") or state.get("topic_category") or "general"
+        selected_state = selection_state(list(confirmed))
+        selected_state["debate_duties"] = assign_parliament_duties(
+            list(confirmed), category
+        )
+        return selected_state
     variables = state.get("briefing", {}).get("key_variables", [])
     roster = CATEGORY_ROSTERS.get(category)
     if roster is None:
@@ -96,5 +100,5 @@ def select_experts(state: dict) -> dict:
     return {
         "selected_expert_ids": selected,
         "expert_selection_reasons": reasons,
-        "debate_duties": assign_parliament_duties(selected),
+        "debate_duties": assign_parliament_duties(selected, category),
     }
