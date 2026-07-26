@@ -203,7 +203,10 @@ async def get_current_parliament(request: Request) -> dict:
 
 
 @router.get("/{parliament_id}")
-async def get_parliament(parliament_id: str) -> ParliamentResponse:
+async def get_parliament(
+    parliament_id: str,
+    include_agent_traces: bool = True,
+) -> ParliamentResponse:
     """获取议会状态（含 transcript / summary 等）。"""
     supabase = get_supabase()
     result = (
@@ -220,15 +223,17 @@ async def get_parliament(parliament_id: str) -> ParliamentResponse:
     data = result.data
     summary = data.get("summary") or {}
     tool_calls = data.get("tool_calls", [])
-    try:
-        stored_events = fetch_events_since(parliament_id, 0, limit=500)
-        stored_traces = [
-            {"seq": event["seq"], **(event.get("payload") or {})}
-            for event in stored_events
-            if event.get("event_type") == "agent_trace"
-        ]
-    except Exception:
-        stored_traces = []
+    stored_traces = []
+    if include_agent_traces:
+        try:
+            stored_events = fetch_events_since(parliament_id, 0, limit=500)
+            stored_traces = [
+                {"seq": event["seq"], **(event.get("payload") or {})}
+                for event in stored_events
+                if event.get("event_type") == "agent_trace"
+            ]
+        except Exception:
+            stored_traces = []
     return ParliamentResponse(
         id=data["id"],
         topic=data["topic"],
@@ -244,11 +249,17 @@ async def get_parliament(parliament_id: str) -> ParliamentResponse:
             or summary.get("selected_expert_ids", [])
         ),
         agent_results=summary.get("agent_results", {}),
-        agent_traces=stored_traces or [
-            item["trace"]
-            for item in tool_calls
-            if item.get("action") == "agent_trace" and isinstance(item.get("trace"), dict)
-        ],
+        agent_traces=(
+            stored_traces
+            or [
+                item["trace"]
+                for item in tool_calls
+                if item.get("action") == "agent_trace"
+                and isinstance(item.get("trace"), dict)
+            ]
+            if include_agent_traces
+            else []
+        ),
         current_phase=data.get("current_phase") or data.get("status") or "queued",
         worker_available=_worker_available(),
         completed_expert_count=len(data.get("members_state") or {}),

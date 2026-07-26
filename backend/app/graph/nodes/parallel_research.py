@@ -474,6 +474,8 @@ async def _parallel_agent_research(state: dict) -> dict:
                 "content": member["reasoning_summary"],
                 "evidence": member["evidence"],
                 "confidence": member["confidence"],
+                "position": member.get("position"),
+                "basis_level": member.get("basis_level", "limited"),
                 "degraded": member.get("degraded", False),
             }
         )

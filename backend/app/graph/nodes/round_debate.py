@@ -236,6 +236,13 @@ async def run_debate_round(state: dict) -> dict:
                 "content": stmt.reasoning_summary,
                 "evidence": [e.model_dump() for e in stmt.evidence],
                 "confidence": stmt.confidence,
+                "basis_level": initial_stances.get(
+                    stmt.member_id, {}
+                ).get("basis_level", "limited"),
+                "duty": DUTY_LABELS.get(
+                    debate_duties.get(stmt.member_id, ""),
+                    "专业质询",
+                ),
             }
             new_entries.append(entry)
             tool_calls_log.append({

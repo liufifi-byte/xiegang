@@ -182,3 +182,48 @@ def test_parliament_get_returns_archived_agent_research(client, monkeypatch):
     data = response.json()
     assert data["selected_expert_ids"] == ["economist"]
     assert data["agent_traces"][0]["phase"] == "started"
+
+
+def test_summary_query_can_exclude_agent_work_path(client, monkeypatch):
+    from app.api import parliament as parl_api
+
+    class MockSupabase:
+        def table(self, name):
+            class Chain:
+                def select(self, *args):
+                    return self
+                def eq(self, *args):
+                    return self
+                def single(self):
+                    return self
+                def execute(self):
+                    class Result:
+                        data = {
+                            "id": "p-summary",
+                            "topic": "买房",
+                            "status": "done",
+                            "created_at": "2026-07-26T00:00:00Z",
+                            "summary": {"advice": "暂缓"},
+                            "transcript": [],
+                            "members_state": {},
+                            "tool_calls": [
+                                {
+                                    "action": "agent_trace",
+                                    "trace": {
+                                        "agent_id": "economist",
+                                        "phase": "tool_started",
+                                    },
+                                }
+                            ],
+                        }
+
+                    return Result()
+
+            return Chain()
+
+    monkeypatch.setattr(parl_api, "get_supabase", lambda: MockSupabase())
+    response = client.get(
+        "/api/parliament/p-summary?include_agent_traces=false"
+    )
+    assert response.status_code == 200
+    assert response.json()["agent_traces"] == []

@@ -82,6 +82,7 @@ class ObservationNormalizer:
                     url=item.url,
                     content=content,
                     score=item.score,
+                    metadata=item.metadata,
                 )
             )
             remaining -= len(content)

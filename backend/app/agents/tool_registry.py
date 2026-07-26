@@ -95,7 +95,7 @@ async def _calculator_handler(args: BaseModel, _: ToolContext) -> list[ToolResul
             content=f"{parsed.expression} = {value}",
             score=1.0,
             metadata={
-                "inputs": parsed.variables,
+                "inputs": parsed.variables or {"expression": parsed.expression},
                 "formula": parsed.expression,
                 "result": value,
             },
@@ -211,6 +211,21 @@ class ToolRegistry:
             return cached.model_copy(update={"tool_call_id": call_id, "cache_hit": True})
         try:
             results = await tool.handler(parsed, context)
+            if tool_name == "calculator" and isinstance(parsed, CalculatorArgs):
+                calculator_args = parsed
+                results = [
+                    item.model_copy(
+                        update={
+                            "metadata": {
+                                **item.metadata,
+                                "inputs": calculator_args.variables
+                                or {"expression": calculator_args.expression},
+                                "formula": calculator_args.expression,
+                            }
+                        }
+                    )
+                    for item in results
+                ]
             observation = ToolObservation(
                 tool_call_id=call_id,
                 tool_name=tool_name,

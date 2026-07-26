@@ -6,7 +6,12 @@ import asyncio
 import time
 from typing import Any
 
-from app.agents.harness import AgentBudget, AgentCancelled, AgentHarness
+from app.agents.harness import (
+    AgentBudget,
+    AgentBudgetExceeded,
+    AgentCancelled,
+    AgentHarness,
+)
 from app.agents.model_adapter import DecisionAdapter, ResilientDecisionAdapter
 from app.agents.profiles import ExpertProfile
 from app.agents.research_graph import (
@@ -85,7 +90,7 @@ class ExpertResearchAgentRunner:
                 graph.ainvoke(state, config=config),
                 timeout=max(0.01, self.harness.budget.remaining_seconds),
             )
-        except TimeoutError:
+        except (TimeoutError, AgentBudgetExceeded):
             reason = "Agent 总运行时间已达到上限"
             result = self.harness.validate_result(
                 _evidence_backed_fallback(self.profile, self.harness, reason),
