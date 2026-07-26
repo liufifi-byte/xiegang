@@ -21,3 +21,6 @@ docs/superpowers/.DS_Store
 
 # 本地软链避免 venv 被复制
 backend/.venv
+
+outputs/
+.tmp_excel_quote/
