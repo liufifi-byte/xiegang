@@ -30,7 +30,7 @@ MEMBER_INFO: dict[str, tuple[str, str]] = {
 }
 
 
-DEBATE_PROMPT = """你是{member_name}，本场专业身份与任务是：{member_role}。
+DEBATE_PROMPT = """你是 Decision Council 的{member_name}，本场专业身份与任务是：{member_role}。
 
 ## 当前议会状态
 【议题】{topic}
@@ -40,11 +40,14 @@ DEBATE_PROMPT = """你是{member_name}，本场专业身份与任务是：{membe
 {history}
 
 ## 你的工作
-基于其他议员的发言，发表你第 {round_num} 轮的发言。你**必须**做以下至少一件事：
-- 质询某议员（必须引用他的具体原话）
-- 反驳某议员（必须指出他的逻辑漏洞）
-- 补充自己的立场（必须有新证据，不能重复之前说的）
-- 弃权（仅在完全同意他人观点时）
+发表你第 {round_num} 轮的发言。
+{round_rules}
+
+共同规则：
+- 事实、计算和推断假设必须明确区分
+- 没有可核验来源时不得生成精确市场数据或历史统计
+- 可以调整立场，但必须说明是哪条新信息改变了判断
+- 不能重复前面已经说过的内容
 
 ## 输出要求
 严格 JSON（不要 markdown 代码块、不要其他文字）：
@@ -53,7 +56,7 @@ DEBATE_PROMPT = """你是{member_name}，本场专业身份与任务是：{membe
   "stance": "for|against|neutral",
   "confidence": 0.0-1.0,
   "evidence": [{{"claim": "...", "source": "...", "strength": "high|medium|low"}}],
-  "reasoning_summary": "本轮发言正文（需明确引用对方原话）"
+  "reasoning_summary": "80-150字的本轮正式发言"
 }}"""
 
 
@@ -94,6 +97,23 @@ async def _debate_one_member_async(
     parliament_id: str | None = None,
 ) -> MemberStatement:
     """单个议员本轮发言（异步版本）。V2-S2 切真 ainvoke + cancel_guard。"""
+    if next_round == 1:
+        round_rules = """这是第一轮全员立场陈述。必须包含：
+- 当前倾向与核心理由
+- 最重要的一项分析依据
+- 最担心的风险
+- 想质询哪位专家的哪个具体判断"""
+    elif next_round == 2:
+        round_rules = """这是第二轮交叉质询。必须完成至少一项：
+- 回应并引用另一位专家的具体前提
+- 补充一项新证据或新推理
+- 指出事实判断与价值排序的区别
+- 提出一个可执行替代方案"""
+    else:
+        round_rules = """这是第三轮收敛与压力测试。不得重复前两轮，必须说明：
+- 剩余分歧属于事实、推理还是价值选择
+- 当前更成立的条件判断
+- 结论翻转条件或用户下一步行动"""
     prompt = DEBATE_PROMPT.format(
         member_name=name,
         member_role=role,
@@ -101,6 +121,7 @@ async def _debate_one_member_async(
         topic=topic,
         variables=", ".join(variables) if variables else "（无）",
         round_num=next_round,
+        round_rules=round_rules,
         history=history_str,
     )
 

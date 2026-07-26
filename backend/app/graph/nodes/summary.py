@@ -1,200 +1,300 @@
-"""议长总结节点：基于辩论 + 选举结果，输出议会纪要。
+"""Neutral, evidence-aware decision summary with a deterministic fallback."""
 
-议长 = 选举获胜者（已写入 state["election_result"]["winner"]）。
+from __future__ import annotations
 
-输出结构化议会纪要：
-- consensus: 5 个议员都同意的
-- dissent: 核心争议点 + 各方立场
-- blind_spots: 议长补的盲区（本次辩论没人提到的视角）
-- advice: 综合建议（标注"不是正确答案"）
-- open_questions: 建议用户下一步去搞清楚的事
-"""
 import json
 import re
 
 from app.llm import get_llm
-from app.agents.profiles import runtime_member_info
 
 
-MEMBER_INFO: dict[str, tuple[str, str]] = {
-    "suan": ("老算", "理性"),
-    "chen": ("老沉", "保守"),
-    "ji":   ("小机", "机会"),
-    "nian": ("十年", "长期"),
-    "fan":  ("反对", "反共识"),
-}
+SUMMARY_PROMPT = """你是 Decision Council 的中立主持人，不属于任何专家，也不参加竞选。
 
+## 任务
+根据用户问题、专家正式发言和核心争议，形成一份可行动的决策总结。
 
-SUMMARY_PROMPT = """你是邪杠议会当选议长。
+## 硬约束
+- 不得用专家职业身份代替证据
+- 明确区分已确认事实、计算结果和推断假设
+- 不输出置信度百分比
+- 不输出 Agent 工作路径、工具步骤或内部状态
+- 必须给出结论翻转条件
+- 这是一份辅助决策建议，不替用户作出决定
 
-## 补充守则
-- 你必须先列出本次议会的"共识区"（≥1 条）
-- 你必须列出"分歧区"（≥1 条）
-- 你必须主动补一个"盲区"——本次辩论没人提到的视角
-- 综合建议必须明确标注"这是综合建议，不是正确答案"
-- 不要重复你作为议员时说过的话——你现在以议长身份说话
-- 你的综合必须客观，不能偏向你原本的思维模型
+## 用户问题
+{topic}
 
-## 议会信息
-议题：{topic}
-当选议长：{chair}（{chair_role}）
-是否兜底任命：{fallback_note}
+## 决策模型
+{decision_model}
 
-## 5 议员立场摘要
+## 专家最终判断
 {members_summary}
 
-## 辩论记录（最近 20 条）
+## 核心争议
+{disputes}
+
+## 最近正式讨论
 {debate_summary}
 
-## 输出（严格 JSON，不要 markdown、不要其他文字）
+## 输出
+只返回 JSON：
 {{
-  "consensus": ["共识1", "共识2"],
+  "recommendation": "当前建议",
+  "recommendation_strength": "conditional|clear|insufficient",
+  "key_reason": "最关键理由",
+  "consensus": ["共识"],
   "dissent": [
-    {{"topic": "争议主题", "sides": {{"suan": "立场", "chen": "立场"}}}}
+    {{"topic": "争议主题", "sides": {{"专家ID": "观点"}}}}
   ],
-  "blind_spots": ["本次辩论没人提的视角1", "视角2"],
-  "advice": "综合建议（包含'这是综合建议不是正确答案'）",
-  "open_questions": ["建议用户下一步搞清楚的1", "2"]
+  "decision_options": [
+    {{"option": "方案", "benefits": ["收益"], "costs": ["代价"]}}
+  ],
+  "assumptions": ["仍在使用的推断假设"],
+  "next_actions": ["下一步行动"],
+  "reversal_conditions": ["结论翻转条件"],
+  "open_questions": ["仍需用户确认的问题"]
 }}"""
 
 
 def _extract_json_from_response(text: str) -> dict:
-    """从 LLM 回复里抠出 JSON（容错）。
-
-    LLM 偶尔会包 ```json ... ``` 或前后带解释性文字。
-    """
     text = text.strip()
-
-    # 先尝试剥离 markdown fence
     fence_match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
     if fence_match:
         text = fence_match.group(1).strip()
-
-    # 找第一个 { 到最后一个 }
     start = text.find("{")
     end = text.rfind("}")
     if start == -1 or end == -1 or end <= start:
-        raise ValueError(f"无法在响应中找到 JSON 对象：{text[:100]}")
-
-    json_str = text[start:end + 1]
-    return json.loads(json_str)
+        raise ValueError("总结响应中没有 JSON 对象")
+    return json.loads(text[start : end + 1])
 
 
-def _fallback_summary(state: dict, error_msg: str) -> dict:
-    """LLM 失败时的兜底纪要结构。"""
-    members_summary = "\n".join([
-        f"- [{mid}] 立场={data.get('stance', '?')}: "
-        f"{(data.get('reasoning_summary') or data.get('content') or '')[:100]}"
-        for mid, data in state.get("members", {}).items()
-    ])
+def _member_summary(state: dict) -> tuple[str, list[dict]]:
+    lines: list[str] = []
+    stances: list[dict] = []
+    for expert_id in state.get("selected_expert_ids", []):
+        data = state.get("members", {}).get(expert_id, {})
+        stance = data.get("stance", "neutral")
+        content = (
+            data.get("reasoning_summary") or data.get("content") or "本轮未完成"
+        )
+        lines.append(f"- [{expert_id}] 立场={stance}: {content[:240]}")
+        stances.append(
+            {
+                "expert_id": expert_id,
+                "stance": stance,
+                "position": data.get("position"),
+                "basis_level": data.get("basis_level", "limited"),
+            }
+        )
+    return "\n".join(lines) or "（无）", stances
+
+
+def _clean_analysis_basis(state: dict) -> dict[str, list[dict]]:
+    grouped: dict[str, list[dict]] = {
+        "user_facts": [],
+        "web_sources": [],
+        "calculations": [],
+        "inferences": [],
+    }
+    seen: set[str] = set()
+
+    decision_model = state.get("decision_model", {})
+    for index, fact in enumerate(decision_model.get("user_facts", [])):
+        key = f"user_{index}_{fact}"
+        if key not in seen:
+            grouped["user_facts"].append(
+                {"evidence_id": key, "content": str(fact)}
+            )
+            seen.add(key)
+
+    for archive in state.get("agent_results", {}).values():
+        for evidence in archive.get("evidence", []):
+            evidence_id = str(evidence.get("evidence_id") or "")
+            if not evidence_id or evidence_id in seen:
+                continue
+            seen.add(evidence_id)
+            kind = evidence.get("kind", "inference")
+            item = {
+                "evidence_id": evidence_id,
+                "content": evidence.get("claim_summary", ""),
+                "supports_claim": evidence.get("supports_claim", ""),
+                "source_title": evidence.get("source_title", ""),
+                "source_url": evidence.get("source_url"),
+                "source_domain": evidence.get("source_domain", ""),
+                "published_at": evidence.get("published_at"),
+                "freshness_note": evidence.get("freshness_note"),
+                "calculation_inputs": evidence.get("calculation_inputs", {}),
+                "calculation_formula": evidence.get("calculation_formula"),
+                "assumptions": evidence.get("assumptions", []),
+            }
+            target = {
+                "user_fact": "user_facts",
+                "web_source": "web_sources",
+                "calculation": "calculations",
+                "inference": "inferences",
+            }.get(kind, "inferences")
+            grouped[target].append(item)
+
+    for expert_id, archive in state.get("agent_results", {}).items():
+        for index, assumption in enumerate(
+            archive.get("result", {}).get("assumptions", [])
+        ):
+            key = f"inference_{expert_id}_{index}"
+            if key not in seen:
+                grouped["inferences"].append(
+                    {
+                        "evidence_id": key,
+                        "content": assumption,
+                        "expert_id": expert_id,
+                    }
+                )
+                seen.add(key)
+    return grouped
+
+
+def _basis_assessment(
+    analysis_basis: dict[str, list[dict]],
+    decision_model: dict,
+) -> dict:
+    verified_count = sum(
+        len(analysis_basis[key])
+        for key in ("user_facts", "web_sources", "calculations")
+    )
+    unknown_count = len(decision_model.get("unknowns", []))
+    if verified_count >= 4 and unknown_count <= 1:
+        level = "strong"
+    elif verified_count >= 1:
+        level = "moderate"
+    else:
+        level = "limited"
     return {
-        "consensus": [],
-        "dissent": [],
-        "blind_spots": [f"[总结生成失败 {error_msg}]，建议人工审阅辩论记录"],
-        "advice": (
-            f"本次议会总结因技术原因未能生成（{error_msg}）。"
-            "请参考 5 议员的辩论记录，自行综合。"
-            "注意：以上仅为兜底信息，不是建议。"
-        ),
-        "open_questions": list(state.get("members", {}).keys()),
-        "members_summary_for_human": members_summary,
+        "level": level,
+        "verified_count": verified_count,
+        "important_unknown_count": unknown_count,
+        "description": {
+            "limited": "关键条件仍缺失，当前结论主要依赖条件分析。",
+            "moderate": "已有部分事实支持，但仍有重要条件需要确认。",
+            "strong": "关键事实和计算较完整，主要反例已经接受检查。",
+        }[level],
+    }
+
+
+def _fallback_summary(state: dict) -> dict:
+    selected = state.get("selected_expert_ids", [])
+    members = state.get("members", {})
+    completed = [
+        expert_id
+        for expert_id in selected
+        if members.get(expert_id, {}).get("content")
+        or members.get(expert_id, {}).get("reasoning_summary")
+    ]
+    latest = [
+        (
+            members.get(expert_id, {}).get("reasoning_summary")
+            or members.get(expert_id, {}).get("content")
+            or ""
+        )
+        for expert_id in completed
+    ]
+    return {
+        "recommendation": "现有信息支持先完成关键验证，再作最终决定。",
+        "recommendation_strength": "insufficient",
+        "key_reason": latest[0][:180] if latest else "关键专家意见尚未完整形成。",
+        "consensus": ["不要把尚未核实的推断当成确定事实。"],
+        "dissent": [
+            {
+                "topic": dispute.get("question", "核心争议"),
+                "sides": {},
+            }
+            for dispute in state.get("core_disputes", [])
+        ],
+        "decision_options": [],
+        "assumptions": [],
+        "next_actions": list(
+            state.get("decision_model", {}).get("research_questions", [])
+        )[:3],
+        "reversal_conditions": list(
+            state.get("decision_model", {}).get("unknowns", [])
+        )[:3]
+        or ["关键未知条件得到确认后重新评估。"],
+        "open_questions": list(
+            state.get("decision_model", {}).get("unknowns", [])
+        )[:3],
+        "fallback_used": True,
     }
 
 
 def run_summary(state: dict) -> dict:
-    """LangGraph 节点：议长做总结。"""
-    election = state.get("election_result") or {}
-    chair_id = election.get("winner", "fan")
-    fallback_used = election.get("fallback_used", False)
-
-    member_info = runtime_member_info(state, MEMBER_INFO)
-    chair_name, chair_role = member_info.get(chair_id, ("会议主持", "综合议会观点"))
-
-    # 5 议员立场摘要
-    members_lines = []
-    for mid, data in state.get("members", {}).items():
-        stance = data.get("stance", "?")
-        confidence = data.get("confidence", 0)
-        summary_text = (
-            data.get("reasoning_summary") or data.get("content") or ""
-        )[:200]
-        members_lines.append(
-            f"- [{mid}] 立场={stance} 置信={confidence}: {summary_text}"
-        )
-    members_summary = "\n".join(members_lines) or "（无）"
-
-    # 辩论记录（最近 20 条）
+    """Build a neutral summary; never expose internal Agent execution traces."""
+    members_summary, member_positions = _member_summary(state)
     debate_lines = []
-    for entry in state.get("transcript", [])[-20:]:
-        if entry.get("type") in ("debate", "research"):
-            speaker = entry.get("speaker", "?")
-            r = entry.get("round", 0)
-            content = (entry.get("content") or "")[:200]
-            stance = entry.get("stance", "")
-            debate_lines.append(f"[{speaker} R{r} | {stance}]: {content}")
-    debate_summary = "\n".join(debate_lines) or "（无）"
-
-    prompt = SUMMARY_PROMPT.format(
-        topic=state["topic"],
-        chair=chair_name,
-        chair_role=chair_role,
-        fallback_note="是（选举失败后兜底任命）" if fallback_used else "否",
-        members_summary=members_summary,
-        debate_summary=debate_summary,
-    )
+    for entry in state.get("transcript", [])[-24:]:
+        if entry.get("type") == "debate":
+            debate_lines.append(
+                f"[{entry.get('speaker')} 第{entry.get('round')}轮]: "
+                f"{str(entry.get('content', ''))[:220]}"
+            )
+    disputes = state.get("core_disputes", [])
+    decision_model = state.get("decision_model", {})
 
     try:
-        llm = get_llm(temperature=0.5, max_tokens=3000)
-        response = llm.invoke(prompt)
+        response = get_llm(temperature=0.35, max_tokens=2600).invoke(
+            SUMMARY_PROMPT.format(
+                topic=state.get("topic", ""),
+                decision_model=json.dumps(decision_model, ensure_ascii=False),
+                members_summary=members_summary,
+                disputes=json.dumps(disputes, ensure_ascii=False),
+                debate_summary="\n".join(debate_lines) or "（无）",
+            )
+        )
         content = response.content if hasattr(response, "content") else str(response)
         summary = _extract_json_from_response(content)
+        summary["fallback_used"] = False
+    except Exception:
+        summary = _fallback_summary(state)
 
-        # 校验必填字段
-        for key in ("consensus", "dissent", "blind_spots", "advice", "open_questions"):
-            if key not in summary:
-                summary[key] = [] if key != "advice" else ""
+    defaults = {
+        "recommendation": "建议先补充关键信息后再决定。",
+        "recommendation_strength": "insufficient",
+        "key_reason": "当前判断仍依赖未确认条件。",
+        "consensus": [],
+        "dissent": [],
+        "decision_options": [],
+        "assumptions": [],
+        "next_actions": [],
+        "reversal_conditions": ["关键未知条件得到确认后重新评估。"],
+        "open_questions": [],
+    }
+    for key, value in defaults.items():
+        summary.setdefault(key, value)
 
-        # 强制 advice 含"不是正确答案"声明
-        if "不是正确答案" not in (summary.get("advice") or ""):
-            summary["advice"] = (
-                (summary.get("advice") or "（综合各方视角）")
-                + "（明确声明：这是综合建议，不是正确答案）"
-            )
-
-    except Exception as e:
-        summary = _fallback_summary(state, str(e))
-
-    # 元数据
-    summary["chair"] = chair_id
-    summary["chair_name"] = chair_name
-    summary["fallback_used"] = fallback_used
-
-    # V1-S1.2: 把完整选举结果 + 议员立场分布一并塞进 summary，供前端展示
-    election = state.get("election_result")
-    if election:
-        summary["election"] = election
-
-    members = state.get("members", {})
-    if members:
-        member_stances = {}
-        for mid, data in members.items():
-            stance = data.get("stance")
-            if stance in ("for", "against", "neutral"):
-                member_stances[mid] = {
-                    "stance": stance,
-                    "confidence": float(data.get("confidence", 0.0)),
+    analysis_basis = _clean_analysis_basis(state)
+    basis_assessment = _basis_assessment(analysis_basis, decision_model)
+    summary.update(
+        {
+            "advice": summary["recommendation"],
+            "blind_spots": summary.get("assumptions", []),
+            "selected_expert_ids": list(state.get("selected_expert_ids", [])),
+            "expert_selection_reasons": state.get("expert_selection_reasons", {}),
+            "member_positions": member_positions,
+            "member_stances": {
+                item["expert_id"]: {
+                    "stance": item["stance"],
+                    # Legacy field retained only so old clients can parse the shape.
+                    "confidence": 0.0,
                 }
-        if member_stances:
-            summary["member_stances"] = member_stances
-
-    # Agent 调研元数据进入可归档纪要；只含安全结果与证据，不含原始模型消息。
-    if state.get("selected_expert_ids"):
-        summary["selected_expert_ids"] = state["selected_expert_ids"]
-        summary["expert_selection_reasons"] = state.get(
-            "expert_selection_reasons", {}
-        )
-        summary["agent_results"] = state.get("agent_results", {})
-        summary["research_degraded"] = state.get("research_degraded", False)
-        summary["research_error"] = state.get("research_error")
-
-    return {"summary": summary}
+                for item in member_positions
+            },
+            "core_disputes": disputes,
+            "analysis_basis": analysis_basis,
+            "basis_assessment": basis_assessment,
+            "round_count": int(state.get("current_round", 0)),
+            "chair": None,
+            "chair_name": "中立主持人",
+        }
+    )
+    # Deliberately exclude agent_results, agent_traces, tool calls and timings.
+    return {
+        "summary": summary,
+        "basis_assessment": basis_assessment,
+    }

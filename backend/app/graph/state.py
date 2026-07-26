@@ -25,6 +25,7 @@ class ParliamentState(TypedDict):
     divergent_expert_ids: list[str]
     core_disputes: list[dict[str, Any]]
     round_decisions: list[dict[str, Any]]
+    needs_third_round: bool
     basis_assessment: dict[str, Any]
     agent_results: dict[str, dict]
     agent_traces: list[dict]
@@ -86,6 +87,7 @@ def make_initial_state(
         "divergent_expert_ids": [],
         "core_disputes": [],
         "round_decisions": [],
+        "needs_third_round": False,
         "basis_assessment": {
             "level": "limited",
             "verified_count": 0,

@@ -43,6 +43,11 @@ class TopicBriefing(BaseModel):
     category: str = Field(description="议题类别")
     key_variables: list[str] = Field(min_length=1, max_length=10)
     summary: str = Field(description="一句话议题摘要")
+    options: list[str] = Field(default_factory=list, max_length=5)
+    user_facts: list[str] = Field(default_factory=list, max_length=12)
+    preferences: list[str] = Field(default_factory=list, max_length=8)
+    unknowns: list[str] = Field(default_factory=list, max_length=8)
+    research_questions: list[str] = Field(default_factory=list, max_length=6)
 
 
 PARSE_PROMPT = """你是邪杠议会主调度。分析用户提出的决策议题。
@@ -55,7 +60,12 @@ PARSE_PROMPT = """你是邪杠议会主调度。分析用户提出的决策议�
 {{
   "category": "real_estate|gold|offer|job_change|investment|entrepreneurship|general",
   "key_variables": ["变量1", "变量2", ...],
-  "summary": "一句话概括"
+  "summary": "一句话概括",
+  "options": ["明确的备选方案"],
+  "user_facts": ["只写用户明确提供的信息"],
+  "preferences": ["用户明确表达的偏好或价值排序"],
+  "unknowns": ["会改变结论但用户尚未提供的信息"],
+  "research_questions": ["确实需要外部核实的问题"]
 }}
 
 【固定议题清单】（命中即归类，否则 general）：
@@ -93,12 +103,23 @@ def parse_topic(state: dict) -> dict:
     # 后置校验：LLM 偶尔会乱填 category，强转 general
     category = result.category if result.category in VALID_CATEGORIES else "general"
 
+    decision_model = {
+        "question": state["topic"],
+        "options": list(getattr(result, "options", []) or []),
+        "user_facts": list(getattr(result, "user_facts", []) or []),
+        "preferences": list(getattr(result, "preferences", []) or []),
+        "unknowns": list(getattr(result, "unknowns", []) or []),
+        "research_questions": list(
+            getattr(result, "research_questions", []) or []
+        ),
+    }
     return {
         "category": category,
         "briefing": {
             "key_variables": result.key_variables,
             "summary": result.summary,
         },
+        "decision_model": decision_model,
     }
 
 
@@ -121,11 +142,24 @@ def _fallback_briefing(
             ),
             "general",
         )
+    background = str(state.get("user_background") or "").strip()
+    variables = list(CATEGORY_VARIABLES[category])
     return {
         "category": category,
         "briefing": {
-            "key_variables": list(CATEGORY_VARIABLES[category]),
+            "key_variables": variables,
             "summary": topic,
             "classification_degraded": classification_degraded,
+        },
+        "decision_model": {
+            "question": topic,
+            "options": [],
+            "user_facts": [background] if background else [],
+            "preferences": [],
+            "unknowns": variables[:4],
+            "research_questions": [
+                f"核实{variable}的当前情况"
+                for variable in variables[:3]
+            ],
         },
     }

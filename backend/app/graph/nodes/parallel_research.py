@@ -383,8 +383,11 @@ def _agent_result_to_member(
         "member_id": expert_id,
         "stance": result.stance,
         "confidence": result.confidence,
+        "position": result.position,
+        "basis_level": result.basis_level,
         "evidence": evidence,
         "reasoning_summary": result.thesis,
+        "key_risks": result.key_risks,
         "assumptions": result.assumptions,
         "unknowns": result.unknowns,
         "reversal_conditions": result.reversal_conditions,
@@ -446,8 +449,11 @@ async def _parallel_agent_research(state: dict) -> dict:
                 "member_id": expert_id,
                 "stance": "neutral",
                 "confidence": 0.0,
+                "position": "undetermined",
+                "basis_level": "limited",
                 "evidence": [],
                 "reasoning_summary": "该专家本轮调研未完成。",
+                "key_risks": [],
                 "assumptions": [],
                 "unknowns": [error],
                 "reversal_conditions": ["重新完成专家调研"],
@@ -513,6 +519,28 @@ async def _parallel_agent_research(state: dict) -> dict:
                 pass
 
     insufficient = successes < 3
+    evidence_pool = list(state.get("evidence_pool", []))
+    known_evidence_ids = {
+        item.get("evidence_id") for item in evidence_pool if item.get("evidence_id")
+    }
+    for archive in agent_results.values():
+        for evidence in archive.get("evidence", []):
+            evidence_id = evidence.get("evidence_id")
+            if evidence_id and evidence_id not in known_evidence_ids:
+                evidence_pool.append(evidence)
+                known_evidence_ids.add(evidence_id)
+    verified_count = sum(
+        evidence.get("kind") in {"user_fact", "web_source", "calculation"}
+        for evidence in evidence_pool
+    )
+    unknown_count = len(state.get("decision_model", {}).get("unknowns", []))
+    basis_level = (
+        "strong"
+        if verified_count >= 4 and unknown_count <= 1
+        else "moderate"
+        if verified_count >= 1
+        else "limited"
+    )
     return {
         "members": members,
         "agent_results": agent_results,
@@ -522,8 +550,14 @@ async def _parallel_agent_research(state: dict) -> dict:
         "transcript": state.get("transcript", []) + research_entries,
         "research_degraded": insufficient,
         "research_error": (
-            f"仅 {successes} 位专家完成调研，无法形成高置信度结论"
+            f"仅 {successes} 位专家完成调研，当前判断基础有限"
             if insufficient
             else None
         ),
+        "evidence_pool": evidence_pool,
+        "basis_assessment": {
+            "level": basis_level,
+            "verified_count": verified_count,
+            "important_unknown_count": unknown_count,
+        },
     }

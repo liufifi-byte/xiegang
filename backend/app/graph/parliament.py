@@ -1,19 +1,25 @@
 """LangGraph StateGraph for the bounded professional council workflow.
 
 流程：
-    parse_topic → select_experts → research → select_divergent
-    → cross_examination → select_chair → summary → archive
+    parse_topic → select_experts → research → opening_round → extract_disputes
+    → cross_examination_round → assess_third_round
+    → [convergence_round] → neutral summary → archive
 
 V2-S1: 接受 checkpointer 参数，配合 thread_id 实现跨重启续盘。
 """
 from langgraph.graph import END, StateGraph
 
 from app.graph.nodes.archive import run_archive
-from app.graph.nodes.cross_examination import run_cross_examination
+from app.graph.nodes.council_rounds import (
+    assess_third_round,
+    extract_core_disputes,
+    route_after_round_two,
+    run_convergence_round,
+    run_cross_examination_round,
+    run_opening_round,
+)
 from app.graph.nodes.parse_topic import parse_topic
 from app.graph.nodes.parallel_research import parallel_research
-from app.graph.nodes.select_chair import select_chair
-from app.graph.nodes.select_divergent_experts import select_divergent_experts
 from app.graph.nodes.select_experts import select_experts
 from app.graph.nodes.summary import run_summary
 from app.graph.state import ParliamentState
@@ -39,19 +45,30 @@ def build_parliament_graph(checkpointer=None):
     workflow.add_node("parse_topic", parse_topic)
     workflow.add_node("research", parallel_research)
     workflow.add_node("select_experts", select_experts)
-    workflow.add_node("select_divergent", select_divergent_experts)
-    workflow.add_node("cross_examination", run_cross_examination)
-    workflow.add_node("select_chair", select_chair)
+    workflow.add_node("opening_round", run_opening_round)
+    workflow.add_node("extract_disputes", extract_core_disputes)
+    workflow.add_node("cross_examination_round", run_cross_examination_round)
+    workflow.add_node("assess_third_round", assess_third_round)
+    workflow.add_node("convergence_round", run_convergence_round)
     workflow.add_node("summary", run_summary)
     workflow.add_node("archive", run_archive)
 
     workflow.set_entry_point("parse_topic")
     workflow.add_edge("parse_topic", "select_experts")
     workflow.add_edge("select_experts", "research")
-    workflow.add_edge("research", "select_divergent")
-    workflow.add_edge("select_divergent", "cross_examination")
-    workflow.add_edge("cross_examination", "select_chair")
-    workflow.add_edge("select_chair", "summary")
+    workflow.add_edge("research", "opening_round")
+    workflow.add_edge("opening_round", "extract_disputes")
+    workflow.add_edge("extract_disputes", "cross_examination_round")
+    workflow.add_edge("cross_examination_round", "assess_third_round")
+    workflow.add_conditional_edges(
+        "assess_third_round",
+        route_after_round_two,
+        {
+            "convergence": "convergence_round",
+            "summary": "summary",
+        },
+    )
+    workflow.add_edge("convergence_round", "summary")
     workflow.add_edge("summary", "archive")
     workflow.add_edge("archive", END)
 

@@ -16,7 +16,8 @@ def test_make_initial_state_has_all_fields():
         "selected_expert_ids", "expert_selection_reasons",
         "debate_duties",
         "divergent_expert_ids",
-        "core_disputes", "round_decisions", "basis_assessment",
+        "core_disputes", "round_decisions", "needs_third_round",
+        "basis_assessment",
         "agent_results", "agent_traces",
         "research_degraded", "research_error",
     }

@@ -1,5 +1,6 @@
-"""summary 节点测试。"""
 import json
+
+import pytest
 
 from app.graph.nodes.summary import (
     _extract_json_from_response,
@@ -8,196 +9,134 @@ from app.graph.nodes.summary import (
 )
 
 
-def test_extract_json_plain():
-    text = '{"a": 1, "b": [1, 2]}'
-    result = _extract_json_from_response(text)
-    assert result == {"a": 1, "b": [1, 2]}
-
-
-def test_extract_json_with_markdown_fence():
-    text = '```json\n{"a": 1}\n```'
-    result = _extract_json_from_response(text)
-    assert result == {"a": 1}
-
-
-def test_extract_json_with_surrounding_text():
-    text = '好的，这是结果：\n{"consensus": ["x"], "y": 2}\n以上。'
-    result = _extract_json_from_response(text)
-    assert result["consensus"] == ["x"]
-
-
-def test_extract_json_raises_on_no_json():
-    import pytest
-    with pytest.raises(ValueError):
-        _extract_json_from_response("完全不是 JSON 的纯文本")
-
-
-def test_fallback_summary_has_required_fields():
+def _state(**overrides):
     state = {
+        "topic": "要不要买房",
+        "decision_model": {
+            "question": "要不要买房",
+            "user_facts": ["家庭税后月收入4万元"],
+            "unknowns": ["未来三年是否换城市"],
+            "research_questions": ["核实当地租售比"],
+        },
+        "selected_expert_ids": ["mathematician", "economist"],
+        "expert_selection_reasons": {},
         "members": {
-            "suan": {"stance": "for", "reasoning_summary": "x"},
-            "chen": {"stance": "against", "content": "y"},
-        }
-    }
-    result = _fallback_summary(state, "test error")
-    assert result["blind_spots"]
-    assert "test error" in result["advice"] or "失败" in result["advice"]
-
-
-def test_run_summary_parses_llm_response(monkeypatch):
-    """Mock LLM 返回合法 JSON → 解析成功。"""
-    from app.graph.nodes import summary as sm_module
-
-    valid_json = json.dumps({
-        "consensus": ["5 议员都认为是高方差决策"],
-        "dissent": [{"topic": "时间窗口", "sides": {"ji": "短", "chen": "长"}}],
-        "blind_spots": ["没人讨论配偶职业"],
-        "advice": "综合建议：分仓试错。这是综合建议，不是正确答案。",
-        "open_questions": ["12 个月现金流？"],
-    })
-
-    class MockLLM:
-        def invoke(self, prompt):
-            class R:
-                content = valid_json
-            return R()
-
-    monkeypatch.setattr(
-        sm_module, "get_llm",
-        lambda temperature=0.5, max_tokens=2000: MockLLM(),
-    )
-
-    state = {
-        "topic": "要不要接 offer",
-        "election_result": {"winner": "chen", "fallback_used": False},
-        "members": {
-            "suan": {"stance": "for", "confidence": 0.7, "reasoning_summary": "数字可以"},
-            "chen": {"stance": "against", "confidence": 0.8, "reasoning_summary": "风险大"},
+            "mathematician": {
+                "stance": "neutral",
+                "content": "现金流阈值尚未确认",
+                "basis_level": "moderate",
+            },
+            "economist": {
+                "stance": "against",
+                "content": "应比较继续租住的机会成本",
+                "basis_level": "limited",
+            },
         },
         "transcript": [
-            {"speaker": "suan", "round": 1, "type": "debate",
-             "content": "数字支持", "stance": "for"},
+            {
+                "speaker": "economist",
+                "round": 2,
+                "type": "debate",
+                "content": "应先验证持有期限。",
+            }
         ],
+        "core_disputes": [
+            {
+                "dispute_id": "d1",
+                "question": "流动性成本是否可接受？",
+                "participants": ["mathematician", "economist"],
+            }
+        ],
+        "agent_results": {},
+        "current_round": 2,
     }
-    result = run_summary(state)
-    summary = result["summary"]
-    assert summary["consensus"] == ["5 议员都认为是高方差决策"]
-    assert summary["chair"] == "chen"
-    assert summary["chair_name"] == "老沉"
-    assert summary["fallback_used"] is False
-    assert "不是正确答案" in summary["advice"]
+    state.update(overrides)
+    return state
 
 
-def test_run_summary_appends_disclaimer_if_missing(monkeypatch):
-    """LLM 偶尔忘记写'不是正确答案'，节点要补上。"""
+def test_extract_json_tolerates_markdown_and_surrounding_text():
+    assert _extract_json_from_response('```json\n{"a": 1}\n```') == {"a": 1}
+    assert _extract_json_from_response('结果：{"a": 2}。') == {"a": 2}
+    with pytest.raises(ValueError):
+        _extract_json_from_response("没有 JSON")
+
+
+def test_fallback_summary_is_actionable_without_internal_error_text():
+    result = _fallback_summary(_state())
+    assert result["recommendation"]
+    assert result["reversal_conditions"]
+    assert "TimeoutError" not in json.dumps(result, ensure_ascii=False)
+
+
+def test_run_summary_is_neutral_and_excludes_agent_work_paths(monkeypatch):
     from app.graph.nodes import summary as sm_module
 
-    valid_json = json.dumps({
-        "consensus": ["x"],
+    payload = {
+        "recommendation": "暂缓购买，先完成两项验证。",
+        "recommendation_strength": "conditional",
+        "key_reason": "持有期限尚未确认。",
+        "consensus": ["先验证现金流"],
         "dissent": [],
-        "blind_spots": ["y"],
-        "advice": "建议做 X",
-        "open_questions": [],
-    })
-
-    class MockLLM:
-        def invoke(self, prompt):
-            class R:
-                content = valid_json
-            return R()
-
-    monkeypatch.setattr(
-        sm_module, "get_llm",
-        lambda temperature=0.5, max_tokens=2000: MockLLM(),
-    )
-
-    state = {
-        "topic": "x",
-        "election_result": {"winner": "fan", "fallback_used": True},
-        "members": {},
-        "transcript": [],
+        "decision_options": [],
+        "assumptions": ["未来三年可能换城市"],
+        "next_actions": ["计算三年现金流"],
+        "reversal_conditions": ["确认居住五年以上"],
+        "open_questions": ["是否换城市"],
     }
-    result = run_summary(state)
-    assert "不是正确答案" in result["summary"]["advice"]
-    assert result["summary"]["fallback_used"] is True
-
-
-def test_run_summary_falls_back_on_bad_response(monkeypatch):
-    """LLM 返回乱七八糟 → fallback。"""
-    from app.graph.nodes import summary as sm_module
 
     class MockLLM:
         def invoke(self, prompt):
-            class R:
-                content = "完全不是 JSON"
-            return R()
+            class Response:
+                content = json.dumps(payload, ensure_ascii=False)
 
-    monkeypatch.setattr(
-        sm_module, "get_llm",
-        lambda temperature=0.5, max_tokens=2000: MockLLM(),
-    )
-
-    state = {
-        "topic": "x",
-        "election_result": {"winner": "fan"},
-        "members": {"suan": {"stance": "for", "reasoning_summary": "x"}},
-        "transcript": [],
-    }
-    result = run_summary(state)
-    assert "未能生成" in result["summary"]["advice"] or "test error" in result["summary"]["advice"]
-    assert result["summary"]["chair"] == "fan"
-
-
-def test_run_summary_uses_professional_chair_name(monkeypatch):
-    from app.graph.nodes import summary as sm_module
-
-    valid_json = json.dumps({
-        "consensus": ["x"],
-        "dissent": [],
-        "blind_spots": ["y"],
-        "advice": "这是综合建议，不是正确答案",
-        "open_questions": [],
-    })
-
-    class MockLLM:
-        def invoke(self, prompt):
-            class R:
-                content = valid_json
-            return R()
+            return Response()
 
     monkeypatch.setattr(sm_module, "get_llm", lambda **kwargs: MockLLM())
-    state = {
-        "topic": "x",
-        "election_result": {"winner": "economist", "fallback_used": False},
-        "selected_expert_ids": [
-            "mathematician", "economist", "psychologist", "artist", "politician"
-        ],
-        "members": {"economist": {"stance": "for", "confidence": 0.7}},
-        "transcript": [],
-    }
-    result = run_summary(state)
-    assert result["summary"]["chair"] == "economist"
-    assert result["summary"]["chair_name"] == "经济学家"
+    summary = run_summary(_state())["summary"]
+    assert summary["recommendation"] == payload["recommendation"]
+    assert summary["chair"] is None
+    assert summary["chair_name"] == "中立主持人"
+    assert summary["round_count"] == 2
+    assert "agent_results" not in summary
+    assert "agent_traces" not in summary
+    assert "tool_calls" not in summary
 
 
-def test_summary_archives_safe_agent_research_metadata(monkeypatch):
+def test_summary_groups_four_evidence_kinds(monkeypatch):
     from app.graph.nodes import summary as sm_module
 
     class BrokenLLM:
         def invoke(self, prompt):
-            raise RuntimeError("use fallback")
+            raise TimeoutError()
 
     monkeypatch.setattr(sm_module, "get_llm", lambda **kwargs: BrokenLLM())
-    state = {
-        "topic": "x",
-        "election_result": {"winner": "economist"},
-        "selected_expert_ids": ["economist"],
-        "expert_selection_reasons": {"economist": "机会成本"},
-        "agent_results": {"economist": {"result": {"thesis": "x"}}},
-        "research_degraded": False,
-        "members": {},
-        "transcript": [],
-    }
+    state = _state(
+        agent_results={
+            "mathematician": {
+                "result": {"assumptions": ["房价保持不变"]},
+                "evidence": [
+                    {
+                        "evidence_id": "web_1",
+                        "kind": "web_source",
+                        "claim_summary": "当前房贷利率",
+                        "source_title": "官方页面",
+                        "source_url": "https://example.com/rate",
+                    },
+                    {
+                        "evidence_id": "calc_1",
+                        "kind": "calculation",
+                        "claim_summary": "月供计算",
+                        "source_title": "安全计算结果",
+                        "calculation_inputs": {"principal": 3000000},
+                        "calculation_formula": "principal * rate",
+                    },
+                ],
+            }
+        }
+    )
     summary = run_summary(state)["summary"]
-    assert summary["selected_expert_ids"] == ["economist"]
-    assert summary["agent_results"]["economist"]["result"]["thesis"] == "x"
+    basis = summary["analysis_basis"]
+    assert basis["user_facts"]
+    assert basis["web_sources"][0]["source_url"]
+    assert basis["calculations"][0]["calculation_formula"]
+    assert basis["inferences"][0]["content"] == "房价保持不变"

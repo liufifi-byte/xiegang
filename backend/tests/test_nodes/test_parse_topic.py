@@ -38,6 +38,7 @@ def test_parse_topic_returns_required_fields(monkeypatch):
     assert result["category"] == "real_estate"
     assert "city" in result["briefing"]["key_variables"]
     assert result["briefing"]["summary"] == "深圳购房决策"
+    assert result["decision_model"]["question"] == "深圳买房"
 
 
 def test_parse_topic_falls_back_to_general_on_invalid_category(monkeypatch):
@@ -84,6 +85,8 @@ def test_known_scene_uses_deterministic_briefing_without_model(monkeypatch):
     assert result["category"] == "offer"
     assert "机会成本" in result["briefing"]["key_variables"]
     assert result["briefing"]["classification_degraded"] is False
+    assert result["decision_model"]["user_facts"] == ["现金收入提高20%"]
+    assert result["decision_model"]["unknowns"]
 
 
 def test_model_failure_falls_back_to_keyword_category(monkeypatch):
