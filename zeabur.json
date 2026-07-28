@@ -1,0 +1,50 @@
+{
+  "services": [
+    {
+      "name": "web",
+      "source": ".",
+      "build": {
+        "dockerfile": "Dockerfile"
+      },
+      "start_command": "uvicorn app.main:app --host 0.0.0.0 --port $PORT",
+      "env_vars": [
+        "GLM_API_KEY",
+        "GLM_BASE_URL",
+        "GLM_MODEL",
+        "GLM_EMBEDDING_MODEL",
+        "SUPABASE_URL",
+        "SUPABASE_KEY",
+        "SUPABASE_DB_URL",
+        "TAVILY_API_KEY",
+        "APP_ENV=production",
+        "LOG_LEVEL=INFO",
+        "CORS_ORIGINS",
+        "PARLIAMENT_TOTAL_TIMEOUT=720",
+        "RATE_LIMIT_IP_PER_MINUTE=2",
+        "RATE_LIMIT_DEVICE_DAILY=10"
+      ],
+      "health_check": "/api/health"
+    },
+    {
+      "name": "worker",
+      "source": ".",
+      "build": {
+        "dockerfile": "Dockerfile"
+      },
+      "start_command": "python -m app.worker",
+      "env_vars": [
+        "GLM_API_KEY",
+        "GLM_BASE_URL",
+        "GLM_MODEL",
+        "GLM_EMBEDDING_MODEL",
+        "SUPABASE_URL",
+        "SUPABASE_KEY",
+        "SUPABASE_DB_URL",
+        "TAVILY_API_KEY",
+        "APP_ENV=production",
+        "LOG_LEVEL=INFO",
+        "SKIP_DB_CONTEXT=false"
+      ]
+    }
+  ]
+}
