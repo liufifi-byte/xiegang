@@ -2,26 +2,29 @@
 name = "council-backend"
 version = "0.1.0"
 requires-python = ">=3.11"
+# 版本钉死：让 Zeabur / 本地 / CI 构建可复现。升级时统一改这里。
+# 版本取自 backend/.venv 实测（2026-07-29），已通过冒烟测试。
 dependencies = [
-    "fastapi>=0.110",
-    "uvicorn[standard]>=0.27",
-    "pydantic>=2.6",
-    "pydantic-settings>=2.2",
-    "langgraph>=0.0.50",
-    "langgraph-checkpoint-postgres>=2.0",
-    "langchain-openai>=0.1",
-    "supabase>=2.4",
-    "psycopg[binary]>=3.1",
-    "psycopg-pool>=3.2",
-    "sse-starlette>=2.0",
+    "fastapi==0.139.2",
+    "uvicorn[standard]==0.51.0",
+    "pydantic==2.13.4",
+    "pydantic-settings==2.14.2",
+    "langgraph==1.2.9",
+    "langgraph-checkpoint-postgres==3.1.0",
+    "langchain-openai==1.3.5",
+    "langchain-core==1.4.9",
+    "supabase==2.31.0",
+    "psycopg[binary]==3.3.4",
+    "psycopg-pool==3.3.1",
+    "sse-starlette==3.4.5",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23",
-    "httpx>=0.27",
-    "ruff>=0.3",
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "httpx==0.28.1",
+    "ruff==0.15.22",
 ]
 
 [build-system]
