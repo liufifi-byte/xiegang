@@ -1,0 +1,76 @@
+# 邪杠会议室 - Docker 构建上下文排除清单
+# 目标：让 backend 镜像 lean，构建快，避免把前端/依赖拷进后端
+
+# === 版本控制 / 元数据 ===
+.git
+.gitignore
+.gitattributes
+.github
+.DS_Store
+**/.DS_Store
+
+# === 依赖目录（容器内重装）===
+node_modules/
+**/node_modules/
+frontend/node_modules/
+
+# === Python 缓存与虚拟环境 ===
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+**/.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+backend/council_backend.egg-info/
+
+# === Next.js 构建产物 ===
+.next/
+.next-dev/
+.next.stale-preview-cache/
+out/
+dist/
+
+# === 前端源码目录（后端镜像不需要）===
+frontend/
+
+# === 本地产物 / 临时目录 ===
+outputs/
+.tmp_excel_quote/
+.tmp*
+*.log
+
+# === 文档与设计稿（不入镜像）===
+docs/
+README.md
+*.md
+!backend/README.md
+
+# === IDE / 编辑器 ===
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# === 环境配置（镜像内不包含 secret）===
+.env
+.env.local
+.env.*.local
+
+# === 部署描述（构建时不需要）===
+zeabur.json
+docker-compose.yml
+Vercel*
+.vercel
+
+# === 其它 ===
+.agents/
+.zcode/
+.superpowers/
+skills/
+tests/
+scripts/dev.sh

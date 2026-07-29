@@ -9,16 +9,15 @@ Worker 每完成一个节点就 append_event。
 SSE 端 500ms 轮询 fetch_events_since(last_seq) 拿新事件推给前端。
 """
 import json
-import re
 from typing import Any
 
 import psycopg
 
-from app.config import get_settings
+from app.db import direct_db_url
 
 
 def _clean_db_url() -> str:
-    return re.sub(r"\?.*$", "", get_settings().supabase_db_url)
+    return direct_db_url()
 
 
 def _safe_json(obj: Any) -> Any:

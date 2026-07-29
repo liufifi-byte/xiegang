@@ -67,8 +67,14 @@ async def _cancel_when_requested(
             logger.warning("议会 %s 取消状态检查失败: %s", parliament_id, exc)
 
 
-def _clean_db_url() -> str:
-    return re.sub(r"\?.*$", "", get_settings().supabase_db_url)
+def _direct_db_url() -> str:
+    """Worker 用的 DB URL。详见 app.db.direct_db_url()。"""
+    from app.db import direct_db_url
+    return direct_db_url()
+
+
+# 兼容旧调用点
+_clean_db_url = _direct_db_url
 
 
 async def _update_worker_heartbeat(active_count: int) -> None:

@@ -100,12 +100,10 @@ def run_archive(state: dict) -> dict:
 
 def _update_embedding_via_pgsql(memory_id: str, vector: list[float]) -> None:
     """裸 SQL 把 embedding 写入。"""
-    import re
     import psycopg
-    from app.config import get_settings
+    from app.db import direct_db_url
 
-    settings = get_settings()
-    db_url = re.sub(r"\?.*$", "", settings.supabase_db_url)
+    db_url = direct_db_url()
 
     # pgvector 接受 '[0.1,0.2,...]' 字符串
     vec_str = "[" + ",".join(str(float(v)) for v in vector) + "]"

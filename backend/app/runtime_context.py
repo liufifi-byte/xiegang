@@ -9,13 +9,12 @@ V1-S4 的 cancel_requested 字段在这里。
 """
 import asyncio
 import os
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import psycopg
 
-from app.config import get_settings
+from app.db import direct_db_url
 
 
 @dataclass
@@ -31,8 +30,12 @@ class ParliamentRuntimeContext:
 
 # ============ DB helpers ============
 
-def _clean_db_url(url: str) -> str:
-    return re.sub(r"\?.*$", "", url)
+def _clean_db_url(url: str = "") -> str:
+    """统一走 app.db.direct_db_url()（绕过 Supabase pooler）。
+
+    保留 url 形参仅为兼容旧调用点；新代码直接用 direct_db_url()。
+    """
+    return direct_db_url()
 
 
 def _skip_db() -> bool:
@@ -50,7 +53,7 @@ _LOCK = asyncio.Lock()
 
 async def _db_upsert(parliament_id: str, **fields) -> None:
     """插入或更新一行。空表时 upsert。"""
-    url = _clean_db_url(get_settings().supabase_db_url)
+    url = _clean_db_url()
     columns = ["parliament_id"] + list(fields.keys())
     placeholders = ["%s"] * len(columns)
     updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in fields.keys())
@@ -71,7 +74,7 @@ def _exec_sql(sql: str, url: str, params: list) -> None:
 
 
 def _fetch_one(sql: str, params: list) -> dict | None:
-    url = _clean_db_url(get_settings().supabase_db_url)
+    url = _clean_db_url()
     with psycopg.connect(url, connect_timeout=30) as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
