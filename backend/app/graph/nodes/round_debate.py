@@ -17,7 +17,11 @@ from app.llm import get_structured_llm
 from app.llm_concurrency import get_llm_semaphore
 from app.runtime_context import consume_user_interrupt
 from app.schemas.member import MemberStatement
-from app.agents.profiles import DUTY_LABELS, runtime_member_info
+from app.agents.profiles import (
+    DUTY_LABELS,
+    get_expert_profile,
+    runtime_member_info,
+)
 
 
 # 议员 mapping：id → (display_name, role_label)
@@ -30,7 +34,10 @@ MEMBER_INFO: dict[str, tuple[str, str]] = {
 }
 
 
-DEBATE_PROMPT = """你是 Decision Council 的{member_name}，本场专业身份与任务是：{member_role}。
+DEBATE_PROMPT = """你是 Decision Council 的{member_name}。
+
+## 你的职业宪法
+{member_role}
 
 ## 当前议会状态
 【议题】{topic}
@@ -48,6 +55,8 @@ DEBATE_PROMPT = """你是 Decision Council 的{member_name}，本场专业身份
 - 没有可核验来源时不得生成精确市场数据或历史统计
 - 可以调整立场，但必须说明是哪条新信息改变了判断
 - 不能重复前面已经说过的内容
+- 模仿职业范例的锐度、结构和人格张力，但绝不能复制范例中的数字、年份和事实
+- 不要用“各有利弊、因人而异、建议综合考虑”代替专业判断
 
 ## 输出要求
 严格 JSON（不要 markdown 代码块、不要其他文字）：
@@ -56,7 +65,7 @@ DEBATE_PROMPT = """你是 Decision Council 的{member_name}，本场专业身份
   "stance": "for|against|neutral",
   "confidence": 0.0-1.0,
   "evidence": [{{"claim": "...", "source": "...", "strength": "high|medium|low"}}],
-  "reasoning_summary": "80-150字的本轮正式发言"
+  "reasoning_summary": "符合本轮结构和字数要求的完整正式发言"
 }}"""
 
 
@@ -79,8 +88,11 @@ def _format_history(transcript: list[dict], member_id: str, round_num: int) -> s
         r = entry.get("round", 0)
         content = entry.get("content", "")
         stance = entry.get("stance", "")
-        if len(content) > 300:
-            content = content[:300] + "..."
+        # Independent judgments are intentionally long and structured. Preserve
+        # enough of them for later experts to respond to the actual analysis.
+        content_limit = 700 if r == 0 else 450
+        if len(content) > content_limit:
+            content = content[:content_limit] + "..."
         lines.append(f"[{speaker} R{r} | {stance}]: {content}")
     return "\n".join(lines)
 
@@ -98,19 +110,21 @@ async def _debate_one_member_async(
 ) -> MemberStatement:
     """单个议员本轮发言（异步版本）。V2-S2 切真 ainvoke + cancel_guard。"""
     if next_round == 1:
-        round_rules = """这是第一轮全员立场陈述。必须包含：
-- 当前倾向与核心理由
-- 最重要的一项分析依据
-- 最担心的风险
-- 想质询哪位专家的哪个具体判断"""
+        round_rules = """这是第一轮全员立场陈述，正文 250-400 字。使用清晰的小标题或自然分段，必须包含：
+- 【我的判断】：当前倾向与核心理由
+- 【关键依据】：最重要的一项分析依据，并标明属于用户信息、网页来源、计算结果还是推断假设
+- 【主要风险】：最担心的一个风险
+- 【我的质疑】：点名质疑另一位专家的一个具体判断
+- 【成立条件】：当前结论在什么条件下成立"""
     elif next_round == 2:
-        round_rules = """这是第二轮交叉质询。必须完成至少一项：
-- 回应并引用另一位专家的具体前提
+        round_rules = """这是第二轮交叉质询，正文 180-300 字，只围绕一个核心争议展开。必须准确引用或复述另一位专家的具体前提，并完成至少一项：
+- 反驳该前提
 - 补充一项新证据或新推理
 - 指出事实判断与价值排序的区别
-- 提出一个可执行替代方案"""
+- 提出一个可执行替代方案
+结尾说明这次回应是否改变了你的立场。"""
     else:
-        round_rules = """这是第三轮收敛与压力测试。不得重复前两轮，必须说明：
+        round_rules = """这是第三轮收敛与压力测试，正文 150-250 字。不得重复前两轮，必须说明：
 - 剩余分歧属于事实、推理还是价值选择
 - 当前更成立的条件判断
 - 结论翻转条件或用户下一步行动"""
@@ -139,6 +153,33 @@ async def _debate_one_member_async(
             coro=structured.ainvoke(prompt),
             timeout=120,  # 单 LLM 调用硬上限 120s（含 web search 耗时）
         )
+
+
+def _professional_role_prompt(
+    member_id: str,
+    fallback_role: str,
+    duty: str,
+) -> str:
+    """Build the complete professional constitution used in every debate round."""
+    try:
+        profile = get_expert_profile(member_id)
+    except ValueError:
+        return f"固定角色：{fallback_role}；本轮职责：{duty}。"
+    return "\n".join(
+        (
+            f"专业身份：{profile.professional_identity}",
+            f"专业方法：{'；'.join(profile.analysis_methods)}",
+            f"必须检查：{'；'.join(profile.required_questions)}",
+            f"表达风格：{'；'.join(profile.communication_style)}",
+            f"标志性问题：{profile.signature_line}",
+            (
+                "专业边界："
+                f"{'；'.join(profile.forbidden_inferences + profile.professional_boundaries)}"
+            ),
+            f"本轮额外职责：{duty}。职责只改变审查重点，不覆盖职业人格。",
+            "腔调范例：\n" + "\n".join(profile.voice_examples),
+        )
+    )
 
 
 async def _debate_member_safe(
@@ -208,11 +249,16 @@ async def run_debate_round(state: dict) -> dict:
         _debate_member_safe(
             mid,
             name,
-            (
-                f"{role} 本轮额外负责{DUTY_LABELS.get(debate_duties.get(mid, ''), '专业质询')}"
-                if state.get("selected_expert_ids")
-                else role
-            ),
+            _professional_role_prompt(
+                mid,
+                role,
+                DUTY_LABELS.get(
+                    debate_duties.get(mid, ""),
+                    "专业质询",
+                ),
+            )
+            if state.get("selected_expert_ids")
+            else role,
             topic,
             variables,
             next_round,

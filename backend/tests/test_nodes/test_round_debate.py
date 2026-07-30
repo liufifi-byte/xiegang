@@ -2,8 +2,10 @@
 import asyncio
 
 from app.graph.nodes.round_debate import (
+    DEBATE_PROMPT,
     MEMBER_INFO,
     _format_history,
+    _professional_role_prompt,
     run_debate_round,
 )
 
@@ -31,11 +33,42 @@ def test_format_history_returns_strings():
 
 
 def test_format_history_truncates_long_content():
-    long_text = "x" * 500
+    long_text = "x" * 1000
     transcript = [{"speaker": "suan", "round": 1, "content": long_text, "stance": "for"}]
     result = _format_history(transcript, "chen", 2)
     assert "..." in result
-    assert len(result) < 600
+    assert len(result) < 550
+
+
+def test_format_history_preserves_long_independent_judgment():
+    long_text = "独立判断" * 90
+    transcript = [
+        {
+            "speaker": "economist",
+            "round": 0,
+            "content": long_text,
+            "stance": "against",
+        }
+    ]
+    result = _format_history(transcript, "mathematician", 1)
+    assert long_text in result
+
+
+def test_professional_role_prompt_includes_complete_persona():
+    role = _professional_role_prompt("mathematician", "理性", "证据审查")
+    assert "专业身份" in role
+    assert "专业方法" in role
+    assert "必须检查" in role
+    assert "表达风格" in role
+    assert "标志性问题" in role
+    assert "专业边界" in role
+    assert "本轮额外职责：证据审查" in role
+    assert "腔调范例" in role
+
+
+def test_debate_prompt_no_longer_caps_reply_at_150_characters():
+    assert "80-150字" not in DEBATE_PROMPT
+    assert "完整正式发言" in DEBATE_PROMPT
 
 
 def test_run_debate_round_increments_round(monkeypatch):

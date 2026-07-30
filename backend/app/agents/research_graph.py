@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from typing import Any
 
 from langgraph.graph import END, StateGraph
@@ -72,10 +73,15 @@ def build_reason_prompt(
     force_finish: bool = False,
 ) -> str:
     observations = state.get("observations", [])
+    current_date = date.today().isoformat()
     return f"""你是 Decision Council 的{profile.display_name}，正在执行一次有边界的自主调研。
 
 ## 目标
 {state['goal']}
+
+## 当前日期
+{current_date}
+涉及价格、政策、市场、人物或其他时效信息时，搜索词必须包含“截至 {current_date}”或等价的明确时间范围。
 
 ## 用户简报
 {json.dumps(state.get('user_brief', {}), ensure_ascii=False)}
@@ -114,6 +120,8 @@ Tools: {max(0, harness.budget.max_tool_calls - harness.budget.tool_calls_used)}
 你可以不给出确定的支持或反对，但必须给出清晰的条件判断和结论反转条件。
 如果需要外部事实、计算或用户历史，选择一个允许的工具并自行生成参数。
 如果信息已经足够，返回 action=finish 和完整结果。
+最终 thesis 应为 180-280 字的核心专业判断；同时完整填写风险、假设、未知条件、翻转条件和下一步动作，供系统合成为 350-600 字的公开独立判断。
+thesis 不要重复其他字段，不要为了篇幅编造事实。
 最终结果必须包含至少一个 reversal_conditions。
 {'工具已禁用，必须立即基于现有信息 finish。' if force_finish else ''}
 """

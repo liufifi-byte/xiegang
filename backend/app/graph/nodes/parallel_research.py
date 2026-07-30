@@ -397,6 +397,74 @@ def _agent_result_to_member(
     }
 
 
+def _format_list(items: list[str], empty_text: str) -> str:
+    cleaned = [str(item).strip() for item in items if str(item).strip()]
+    return "；".join(cleaned) if cleaned else empty_text
+
+
+def _render_public_research_statement(
+    result: ExpertResearchResult,
+    evidence_records: list[dict],
+) -> str:
+    """Turn the structured Agent result into one complete public statement."""
+    stance_label = {
+        "for": "支持",
+        "against": "反对",
+        "neutral": "暂不作绝对判断",
+    }[result.stance]
+    evidence_by_id = {
+        record.get("evidence_id"): record for record in evidence_records
+    }
+    evidence_lines = []
+    for ref in result.evidence_refs:
+        record = evidence_by_id.get(ref)
+        if not record:
+            continue
+        kind = {
+            "user_fact": "用户信息",
+            "web_source": "网页来源",
+            "calculation": "计算结果",
+            "inference": "推断假设",
+        }.get(record.get("kind"), "分析依据")
+        claim = str(
+            record.get("supports_claim")
+            or record.get("claim_summary")
+            or ""
+        ).strip()
+        source = str(
+            record.get("source_title")
+            or record.get("source_domain")
+            or ""
+        ).strip()
+        detail = claim or source
+        if detail:
+            evidence_lines.append(f"{kind}：{detail}")
+
+    evidence_text = (
+        "；".join(evidence_lines)
+        if evidence_lines
+        else "本轮没有获得可核验的外部来源，以下结论只使用用户信息与明确假设"
+    )
+    unknowns = list(result.unknowns)
+    if result.degraded and result.degradation_reason:
+        unknowns.append(result.degradation_reason)
+
+    return "\n\n".join(
+        (
+            f"【我的判断】{stance_label}。{result.thesis.strip()}",
+            f"【最关键的依据】{evidence_text}。",
+            f"【我最担心的地方】{_format_list(result.key_risks, '关键下行风险仍需结合用户实际承受能力确认')}。",
+            (
+                "【当前假设与未知】"
+                f"{_format_list(result.assumptions, '未使用额外假设')}；"
+                f"仍需确认：{_format_list(unknowns, '暂无额外未知条件')}。"
+            ),
+            f"【什么时候我会改变判断】{_format_list(result.reversal_conditions, '关键条件发生实质变化时重新评估')}。",
+            f"【你下一步应该做什么】{_format_list(result.next_actions, '补充最影响结论的事实后重新比较方案')}。",
+        )
+    )
+
+
 async def _parallel_agent_research(state: dict) -> dict:
     """Run five independent professional ReAct agents in parallel."""
     selected = list(state.get("selected_expert_ids", []))[:5]
@@ -433,6 +501,9 @@ async def _parallel_agent_research(state: dict) -> dict:
             result = ExpertResearchResult.model_validate(agent_state["final_result"])
             evidence_records = agent_state.get("evidence_ledger", [])
             member = _agent_result_to_member(expert_id, result, evidence_records)
+            member["reasoning_summary"] = _render_public_research_statement(
+                result, evidence_records
+            )
             members[expert_id] = member
             agent_results[expert_id] = {
                 "result": result.model_dump(mode="json"),

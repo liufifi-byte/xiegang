@@ -4,8 +4,10 @@ import asyncio
 from app.graph.nodes.parallel_research import (
     MEMBER_TOOLS,
     _load_prompt_template,
+    _render_public_research_statement,
     parallel_research,
 )
+from app.agents.schemas import ExpertResearchResult
 
 
 def test_member_tools_has_5_members():
@@ -135,6 +137,44 @@ def test_semaphore_can_be_created():
     from app.llm_concurrency import get_llm_semaphore
     sem = get_llm_semaphore()
     assert sem is not None
+
+
+def test_public_research_statement_combines_structured_analysis():
+    result = ExpertResearchResult(
+        agent_id="economist",
+        stance="against",
+        confidence=0.7,
+        thesis="当前投入占可用资金比例过高，机会成本不可忽略。",
+        key_risks=["需要用钱时被迫退出"],
+        evidence_refs=["ev_1"],
+        assumptions=["未来一年收入保持稳定"],
+        unknowns=["是否另有应急储备"],
+        reversal_conditions=["投入比例明显下降"],
+        next_actions=["列出未来十二个月的大额支出"],
+    )
+    content = _render_public_research_statement(
+        result,
+        [
+            {
+                "evidence_id": "ev_1",
+                "kind": "user_fact",
+                "supports_claim": "用户计划投入一半可用资金",
+                "source_title": "用户提供",
+            }
+        ],
+    )
+
+    for heading in (
+        "【我的判断】",
+        "【最关键的依据】",
+        "【我最担心的地方】",
+        "【当前假设与未知】",
+        "【什么时候我会改变判断】",
+        "【你下一步应该做什么】",
+    ):
+        assert heading in content
+    assert "用户计划投入一半可用资金" in content
+    assert "是否另有应急储备" in content
 
 
 def test_parallel_research_runs_selected_expert_agents(monkeypatch):

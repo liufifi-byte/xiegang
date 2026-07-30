@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class WebSearchError(RuntimeError):
@@ -19,7 +22,7 @@ def web_search(query: str, max_results: int = 5) -> list[dict]:
     endpoint = f"{settings.glm_base_url.rstrip('/')}/web_search"
     payload = json.dumps(
         {
-            "search_query": str(query).strip()[:70],
+            "search_query": str(query).strip()[:120],
             "search_engine": settings.web_search_engine,
             "search_intent": False,
             "count": max(1, min(int(max_results), 5)),
@@ -46,8 +49,9 @@ def web_search(query: str, max_results: int = 5) -> list[dict]:
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise WebSearchError("independent web search unavailable") from exc
 
+    raw_results = body.get("search_result") or []
     results: list[dict] = []
-    for index, item in enumerate(body.get("search_result") or []):
+    for index, item in enumerate(raw_results):
         url = str(item.get("link") or "").strip()
         content = str(item.get("content") or "").strip()
         if not url or not content:
@@ -64,4 +68,16 @@ def web_search(query: str, max_results: int = 5) -> list[dict]:
         )
         if len(results) >= max_results:
             break
+    filtered_count = max(0, len(raw_results) - len(results))
+    if filtered_count:
+        logger.info(
+            "web_search filtered %s incomplete provider results; kept %s",
+            filtered_count,
+            len(results),
+        )
+    if raw_results and not results:
+        logger.warning(
+            "web_search provider returned %s results but none had both URL and content",
+            len(raw_results),
+        )
     return results
