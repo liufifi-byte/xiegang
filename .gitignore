@@ -24,3 +24,5 @@ backend/.venv
 
 outputs/
 .tmp_excel_quote/
+.superpowers/
+*.tsbuildinfo

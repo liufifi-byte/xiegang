@@ -1,4 +1,5 @@
 import { getDeviceId } from "./device";
+import type { ClarificationQuestion } from "./types";
 
 const API_BASE = "/api";
 
@@ -106,6 +107,31 @@ export async function interruptParliament(
   return res.json();
 }
 
+export async function submitClarification(
+  parliamentId: string,
+  action: "answer" | "skip",
+  answers: Array<{ question_id: string; value: string }> = []
+): Promise<{
+  ok: boolean;
+  clarification_status: "answered" | "skipped";
+  already_submitted: boolean;
+}> {
+  const base = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8001";
+  const res = await fetch(
+    `${base}/api/parliament/${parliamentId}/clarification`,
+    {
+      method: "POST",
+      headers: buildHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ action, answers }),
+    }
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`submitClarification ${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
 /** V1-S4: 取消议会（V2-S2 硬中断路径）。 */
 export async function cancelParliament(
   parliamentId: string
@@ -149,10 +175,12 @@ export async function heartbeatParliament(
 export interface CurrentParliament {
   id: string;
   topic: string;
-  status: "queued" | "running" | "done";
+  status: "queued" | "running" | "awaiting_input" | "done";
   current_phase?: string;
   created_at: string;
   members_state?: Record<string, unknown>;
+  clarification_status?: string;
+  clarification_questions?: ClarificationQuestion[];
 }
 
 export async function getCurrentParliament(): Promise<CurrentParliament | null> {

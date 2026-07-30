@@ -32,6 +32,13 @@ class ParliamentState(TypedDict):
     research_degraded: bool
     research_error: str | None
 
+    # === 专家调研前的信息门槛 ===
+    clarification_status: str
+    clarification_questions: list[dict[str, Any]]
+    clarification_answers: list[dict[str, Any]]
+    clarification_reason: str
+    clarification_waiting: bool
+
     # === 5 议员状态 ===
     members: dict[str, dict]      # {suan: {stance, evidence, reasoning, ...}}
 
@@ -65,6 +72,9 @@ def make_initial_state(
     user_background: str | None = None,
     parliament_id: str | None = None,
     selected_expert_ids: list[str] | None = None,
+    clarification_status: str = "not_checked",
+    clarification_questions: list[dict[str, Any]] | None = None,
+    clarification_answers: list[dict[str, Any]] | None = None,
 ) -> ParliamentState:
     """方便地构造一个干净的初始 state（所有字段都有默认值）。"""
     return {
@@ -99,6 +109,11 @@ def make_initial_state(
         "agent_traces": [],
         "research_degraded": False,
         "research_error": None,
+        "clarification_status": clarification_status,
+        "clarification_questions": list(clarification_questions or []),
+        "clarification_answers": list(clarification_answers or []),
+        "clarification_reason": "",
+        "clarification_waiting": False,
         "members": {},
         "current_round": 0,
         "max_rounds": 3,

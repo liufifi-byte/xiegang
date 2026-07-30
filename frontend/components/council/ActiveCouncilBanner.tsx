@@ -11,6 +11,7 @@ import {
 const PHASE_LABELS: Record<string, string> = {
   queued: "等待分析服务",
   claimed: "正在理解问题",
+  awaiting_input: "等待你补充关键信息",
   researching: "专家正在并行调研",
   cross_examining: "专家正在交叉回应",
   summarizing: "主席正在整理结论",
@@ -46,6 +47,7 @@ export function ActiveCouncilBanner() {
   if (!council) return null;
   const doneCount = Object.keys(council.members_state || {}).length;
   const completed = council.status === "done";
+  const awaitingInput = council.status === "awaiting_input";
 
   return (
     <button
@@ -59,7 +61,7 @@ export function ActiveCouncilBanner() {
     >
       <span className="min-w-0">
         <span className="block text-[10px] font-extrabold tracking-[0.12em] text-[#ec403d]">
-          {completed ? "最近完成" : "正在进行的会议"}
+          {completed ? "最近完成" : awaitingInput ? "等待你补充" : "正在进行的会议"}
         </span>
         <strong className="mt-1 block truncate text-sm text-[#251536]">
           {council.topic}
@@ -67,11 +69,13 @@ export function ActiveCouncilBanner() {
         <small className="mt-1 block text-xs text-[#817681]">
           {PHASE_LABELS[council.current_phase || council.status] ||
             "正在恢复会议"}
-          {!completed && ` · ${doneCount} 位专家已完成`}
+          {awaitingInput
+            ? ` · ${(council.clarification_questions || []).length} 个问题待确认`
+            : !completed && ` · ${doneCount} 位专家已完成`}
         </small>
       </span>
       <span className="shrink-0 rounded-xl bg-[#4b1c62] px-4 py-2 text-xs font-bold text-white">
-        {completed ? "查看结果" : "继续进入"}
+        {completed ? "查看结果" : awaitingInput ? "继续回答" : "继续进入"}
       </span>
     </button>
   );

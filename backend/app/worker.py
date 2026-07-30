@@ -168,7 +168,9 @@ async def fetch_next_queued_parliament() -> dict | None:
                 cur.execute("SET LOCAL lock_timeout = '3s'")
                 cur.execute("""
                     SELECT id, topic, topic_category, user_background, user_id, device_id,
-                           selected_expert_ids
+                           selected_expert_ids, clarification_status,
+                           clarification_questions, clarification_answers,
+                           transcript
                     FROM parliaments
                     WHERE status = 'queued'
                     ORDER BY created_at ASC
@@ -187,6 +189,10 @@ async def fetch_next_queued_parliament() -> dict | None:
                     "user_id",
                     "device_id",
                     "selected_expert_ids",
+                    "clarification_status",
+                    "clarification_questions",
+                    "clarification_answers",
+                    "transcript",
                 ]
                 task = dict(zip(cols, row))
                 cur.execute(
@@ -216,7 +222,13 @@ def _build_initial_state(task: dict) -> dict:
         user_background=task.get("user_background"),
         parliament_id=str(task["id"]),
         selected_expert_ids=task.get("selected_expert_ids"),
-    ) | {"started_at": time.time()}
+        clarification_status=task.get("clarification_status") or "not_checked",
+        clarification_questions=task.get("clarification_questions") or [],
+        clarification_answers=task.get("clarification_answers") or [],
+    ) | {
+        "started_at": time.time(),
+        "transcript": list(task.get("transcript") or []),
+    }
 
 
 def _safe_serialize(obj) -> dict:
@@ -298,6 +310,7 @@ async def run_one_parliament(task: dict) -> None:
 
     start_ts = time.monotonic()
     terminated_early = False
+    waiting_for_input = False
     _append_event_safe(parliament_id, "parliament_started", {
         "topic": task["topic"],
         "category": task.get("topic_category"),
@@ -352,7 +365,9 @@ async def run_one_parliament(task: dict) -> None:
             for node_name, state_update in event.items():
                 phase_by_node = {
                     "parse_topic": "claimed",
-                    "select_experts": "researching",
+                    "select_experts": "claimed",
+                    "clarification_gate": "claimed",
+                    "persist_clarification": "awaiting_input",
                     "research": "researching",
                     "opening_round": "cross_examining",
                     "extract_disputes": "cross_examining",
@@ -364,6 +379,11 @@ async def run_one_parliament(task: dict) -> None:
                 }
                 if node_name in phase_by_node:
                     await _set_phase(parliament_id, phase_by_node[node_name])
+                if (
+                    node_name == "persist_clarification"
+                    and state_update.get("clarification_waiting")
+                ):
+                    waiting_for_input = True
                 try:
                     payload = _safe_serialize(state_update)
                 except Exception:
@@ -373,7 +393,9 @@ async def run_one_parliament(task: dict) -> None:
                     "payload": payload,
                 })
 
-        if not terminated_early:
+        if waiting_for_input:
+            logger.info("议会 %s 等待用户补充，Worker 已释放", parliament_id)
+        elif not terminated_early:
             _append_event_safe(parliament_id, "parliament_done", {})
             logger.info("议会 %s 完成", parliament_id)
 

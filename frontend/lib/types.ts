@@ -156,7 +156,7 @@ export interface TranscriptEntry {
   round?: number;
   type:
     | "research" | "debate" | "debate_error"
-    | "election" | "summary" | "user_interrupt";
+    | "election" | "summary" | "user_interrupt" | "user_clarification";
   stance?: Stance;
   content: string;
   evidence?: Evidence[];
@@ -167,6 +167,16 @@ export interface TranscriptEntry {
   reply_to?: string;
   /** 群聊时间戳（前端渲染用，后端可选填） */
   timestamp?: string;
+}
+
+export interface ClarificationQuestion {
+  id: string;
+  question: string;
+  why_it_matters: string;
+  answer_type: "single_choice" | "number" | "short_text";
+  options: string[];
+  impact: "high";
+  source: "user_only";
 }
 
 export interface ElectionCandidate {

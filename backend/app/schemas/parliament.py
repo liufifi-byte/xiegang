@@ -48,3 +48,16 @@ class ParliamentResponse(BaseModel):
     current_phase: str = "queued"
     worker_available: bool = False
     completed_expert_count: int = 0
+    clarification_status: str = "not_checked"
+    clarification_questions: list[dict[str, Any]] = Field(default_factory=list)
+    clarification_answers: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ClarificationAnswer(BaseModel):
+    question_id: str = Field(min_length=2, max_length=64)
+    value: str | float | int
+
+
+class SubmitClarificationRequest(BaseModel):
+    action: str = Field(pattern="^(answer|skip)$")
+    answers: list[ClarificationAnswer] = Field(default_factory=list, max_length=3)

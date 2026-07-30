@@ -12,10 +12,16 @@ import {
   CouncilPhaseBar,
 } from "@/components/council/CouncilPhaseBar";
 import { ExpertSeatPanel } from "@/components/council/ExpertSeatPanel";
-import { getParliament, heartbeatParliament } from "@/lib/api";
+import { ClarificationModal } from "@/components/council/ClarificationModal";
+import {
+  getParliament,
+  heartbeatParliament,
+  submitClarification,
+} from "@/lib/api";
 import { subscribeParliament } from "@/lib/sse";
 import {
   AgentTraceEvent,
+  ClarificationQuestion,
   MemberId,
   MemberStatus,
   ParliamentSummary,
@@ -38,7 +44,7 @@ export default function ParliamentPage() {
   >({});
   const [currentRound, setCurrentRound] = useState(0);
   const [status, setStatus] = useState<
-    "connecting" | "running" | "done" | "error"
+    "connecting" | "running" | "awaiting_input" | "done" | "error"
   >("connecting");
   const [summary, setSummary] = useState<ParliamentSummary | null>(null);
   const [duration, setDuration] = useState<number | undefined>(undefined);
@@ -47,6 +53,9 @@ export default function ParliamentPage() {
   const [serverPhase, setServerPhase] = useState<string>("queued");
   const [coreDisputes, setCoreDisputes] = useState<
     NonNullable<ParliamentSummary["core_disputes"]>
+  >([]);
+  const [clarificationQuestions, setClarificationQuestions] = useState<
+    ClarificationQuestion[]
   >([]);
 
   // 用户选中的议员（右侧详情抽屉）
@@ -118,6 +127,7 @@ export default function ParliamentPage() {
         setAgentTraces(snapshot.agent_traces || []);
         setWorkerAvailable(snapshot.worker_available !== false);
         setServerPhase(snapshot.current_phase || snapshot.status || "queued");
+        setClarificationQuestions(snapshot.clarification_questions || []);
         const ids = (snapshot.selected_expert_ids || []) as MemberId[];
         setSelectedExpertIds(ids);
         const snapshotMembers = snapshot.members_state || {};
@@ -134,6 +144,10 @@ export default function ParliamentPage() {
           ) as Partial<Record<MemberId, MemberStatus>>
         );
         if (snapshot.status === "done") setStatus("done");
+        else if (snapshot.status === "awaiting_input") {
+          setStatus("awaiting_input");
+          setServerPhase("awaiting_input");
+        }
         else if (snapshot.status === "failed" || snapshot.status === "cancelled") {
           setStatus("error");
           setErrorMsg(
@@ -170,6 +184,40 @@ export default function ParliamentPage() {
           setStatus("running");
           setServerPhase("claimed");
           if (event.topic) setTopic(event.topic);
+          return;
+        }
+
+        if (event.type === "clarification_requested") {
+          setClarificationQuestions(event.questions || []);
+          setStatus("awaiting_input");
+          setServerPhase("awaiting_input");
+          return;
+        }
+
+        if (
+          event.type === "clarification_answered" ||
+          event.type === "clarification_skipped"
+        ) {
+          setClarificationQuestions([]);
+          setStatus("connecting");
+          setServerPhase("queued");
+          if (event.entry) {
+            setTranscript((current) =>
+              current.some(
+                (item) =>
+                  item.type === "user_clarification" &&
+                  item.content === event.entry?.content
+              )
+                ? current
+                : [...current, event.entry as TranscriptEntry]
+            );
+          }
+          return;
+        }
+
+        if (event.type === "clarification_resumed") {
+          setStatus("connecting");
+          setServerPhase("queued");
           return;
         }
 
@@ -256,7 +304,9 @@ export default function ParliamentPage() {
           const node = event.node;
           const phaseByNode: Record<string, string> = {
             parse_topic: "claimed",
-            select_experts: "researching",
+            select_experts: "claimed",
+            clarification_gate: "claimed",
+            persist_clarification: "awaiting_input",
             research: "researching",
             opening_round: "cross_examining",
             extract_disputes: "cross_examining",
@@ -266,6 +316,15 @@ export default function ParliamentPage() {
             summary: "summarizing",
           };
           if (node && phaseByNode[node]) setServerPhase(phaseByNode[node]);
+          if (
+            node === "persist_clarification" &&
+            payload.clarification_waiting
+          ) {
+            setClarificationQuestions(
+              (payload.clarification_questions || []) as ClarificationQuestion[]
+            );
+            setStatus("awaiting_input");
+          }
 
           if (node === "select_experts" && Array.isArray(payload.selected_expert_ids)) {
             const ids = payload.selected_expert_ids as MemberId[];
@@ -277,8 +336,8 @@ export default function ParliamentPage() {
             );
           }
 
-          // parse_topic / research 阶段：议员陆续 thinking
-          if (node === "parse_topic" || node === "research") {
+          // 只有正式调研开始后才把专家切到思考中；信息门槛期间保持待命。
+          if (node === "research") {
             setMemberStatus((prev) => {
               const next = { ...prev };
               (Object.keys(next) as MemberId[]).forEach((k) => {
@@ -406,6 +465,22 @@ export default function ParliamentPage() {
     }
   };
 
+  const handleClarificationSubmit = async (
+    answers: Array<{ question_id: string; value: string }>
+  ) => {
+    await submitClarification(parliamentId, "answer", answers);
+    setClarificationQuestions([]);
+    setStatus("connecting");
+    setServerPhase("queued");
+  };
+
+  const handleClarificationSkip = async () => {
+    await submitClarification(parliamentId, "skip");
+    setClarificationQuestions([]);
+    setStatus("connecting");
+    setServerPhase("queued");
+  };
+
   const handleReturnHome = async () => {
     try {
       await heartbeatParliament(parliamentId, true);
@@ -450,7 +525,10 @@ export default function ParliamentPage() {
   }, [agentTraces.length, currentRound, memberStatus, serverPhase, summary]);
 
   const phaseTitle = {
-    understanding: "正在理解你的问题",
+    understanding:
+      serverPhase === "awaiting_input"
+        ? "等待你补充关键信息"
+        : "正在理解你的问题",
     research: "专家正在独立判断并核实事实",
     debate: currentRound > 0
       ? `专家正在进行第 ${Math.min(currentRound + 1, 3)} 轮讨论`
@@ -560,7 +638,9 @@ export default function ParliamentPage() {
             >
               查看专家
             </button>
-            {status === "connecting" || status === "running" ? (
+            {status === "connecting" ||
+            status === "running" ||
+            status === "awaiting_input" ? (
               <button
                 onClick={handleCancel}
                 className="rounded-lg bg-[#fff0ed] px-3 py-2 text-xs font-bold text-[#a44343] transition hover:bg-[#f9ded9]"
@@ -668,7 +748,7 @@ export default function ParliamentPage() {
 
         <ChatInput
           onSubmit={handleUserSubmit}
-          disabled={status === "error"}
+          disabled={status === "error" || status === "awaiting_input"}
           placeholder="补充背景、追问某位专家，或调整讨论方向…"
         />
       </section>
@@ -694,6 +774,14 @@ export default function ParliamentPage() {
           toolCalls={activeMemberData.toolCalls}
           traces={activeMemberData.traces}
           onClose={() => setActiveMember(null)}
+        />
+      )}
+
+      {status === "awaiting_input" && clarificationQuestions.length > 0 && (
+        <ClarificationModal
+          questions={clarificationQuestions}
+          onSubmit={handleClarificationSubmit}
+          onSkip={handleClarificationSkip}
         />
       )}
 

@@ -19,6 +19,12 @@ from app.graph.nodes.council_rounds import (
     run_cross_examination_round,
     run_opening_round,
 )
+from app.graph.nodes.clarification_gate import (
+    assess_clarification_need,
+    persist_clarification_request,
+    route_after_clarification_gate,
+    route_after_clarification_persist,
+)
 from app.graph.nodes.parse_topic import parse_topic
 from app.graph.nodes.parallel_research import parallel_research
 from app.graph.nodes.select_experts import select_experts
@@ -46,6 +52,8 @@ def build_parliament_graph(checkpointer=None):
     workflow.add_node("parse_topic", parse_topic)
     workflow.add_node("research", parallel_research)
     workflow.add_node("select_experts", select_experts)
+    workflow.add_node("clarification_gate", assess_clarification_need)
+    workflow.add_node("persist_clarification", persist_clarification_request)
     workflow.add_node("opening_round", run_opening_round)
     workflow.add_node("extract_disputes", extract_core_disputes)
     workflow.add_node("cross_examination_round", run_cross_examination_round)
@@ -57,7 +65,20 @@ def build_parliament_graph(checkpointer=None):
 
     workflow.set_entry_point("parse_topic")
     workflow.add_edge("parse_topic", "select_experts")
-    workflow.add_edge("select_experts", "research")
+    workflow.add_edge("select_experts", "clarification_gate")
+    workflow.add_conditional_edges(
+        "clarification_gate",
+        route_after_clarification_gate,
+        {
+            "awaiting_input": "persist_clarification",
+            "research": "research",
+        },
+    )
+    workflow.add_conditional_edges(
+        "persist_clarification",
+        route_after_clarification_persist,
+        {"wait": END, "research": "research"},
+    )
     workflow.add_edge("research", "opening_round")
     workflow.add_edge("opening_round", "extract_disputes")
     workflow.add_edge("extract_disputes", "cross_examination_round")

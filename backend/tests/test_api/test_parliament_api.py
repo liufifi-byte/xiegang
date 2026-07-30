@@ -227,3 +227,129 @@ def test_summary_query_can_exclude_agent_work_path(client, monkeypatch):
     )
     assert response.status_code == 200
     assert response.json()["agent_traces"] == []
+
+
+def test_submit_clarification_requeues_council(client, monkeypatch):
+    from app.api import parliament as parl_api
+
+    row = {
+        "id": "p-clarify",
+        "status": "awaiting_input",
+        "device_id": None,
+        "user_background": "年收入 30 万",
+        "transcript": [],
+        "clarification_status": "awaiting_input",
+        "clarification_questions": [
+            {
+                "id": "allocation",
+                "question": "这笔投入占可支配资金的多少？",
+                "why_it_matters": "影响承受能力",
+                "answer_type": "single_choice",
+                "options": ["不到20%", "20%以上", "不确定"],
+                "impact": "high",
+                "source": "user_only",
+            }
+        ],
+        "clarification_answers": [],
+    }
+
+    class Chain:
+        def __init__(self):
+            self.operation = "select"
+            self.payload = None
+            self.conditions = []
+
+        def select(self, *args):
+            self.operation = "select"
+            return self
+
+        def update(self, payload):
+            self.operation = "update"
+            self.payload = payload
+            return self
+
+        def eq(self, key, value):
+            self.conditions.append((key, value))
+            return self
+
+        def single(self):
+            return self
+
+        def execute(self):
+            class Result:
+                data = None
+
+            if any(row.get(key) != value for key, value in self.conditions):
+                Result.data = None
+            elif self.operation == "update":
+                row.update(self.payload)
+                Result.data = [dict(row)]
+            else:
+                Result.data = dict(row)
+            return Result()
+
+    class MockSupabase:
+        def table(self, name):
+            return Chain()
+
+    monkeypatch.setattr(parl_api, "get_supabase", lambda: MockSupabase())
+    monkeypatch.setattr(parl_api, "append_event", lambda *args, **kwargs: 1)
+
+    response = client.post(
+        "/api/parliament/p-clarify/clarification",
+        json={
+            "action": "answer",
+            "answers": [
+                {"question_id": "allocation", "value": "20%以上"}
+            ],
+        },
+    )
+    assert response.status_code == 200
+    assert row["status"] == "queued"
+    assert row["clarification_status"] == "answered"
+    assert "20%以上" in row["user_background"]
+    assert row["transcript"][0]["type"] == "user_clarification"
+
+
+def test_submit_clarification_requires_all_answers(client, monkeypatch):
+    from app.api import parliament as parl_api
+
+    row = {
+        "id": "p-clarify",
+        "status": "awaiting_input",
+        "device_id": None,
+        "user_background": "",
+        "transcript": [],
+        "clarification_status": "awaiting_input",
+        "clarification_questions": [
+            {
+                "id": "goal",
+                "question": "你的目标是什么？",
+                "answer_type": "short_text",
+                "options": [],
+            }
+        ],
+        "clarification_answers": [],
+    }
+
+    class MockSupabase:
+        def table(self, name):
+            class Chain:
+                def select(self, *args):
+                    return self
+                def eq(self, *args):
+                    return self
+                def single(self):
+                    return self
+                def execute(self):
+                    class Result:
+                        data = row
+                    return Result()
+            return Chain()
+
+    monkeypatch.setattr(parl_api, "get_supabase", lambda: MockSupabase())
+    response = client.post(
+        "/api/parliament/p-clarify/clarification",
+        json={"action": "answer", "answers": []},
+    )
+    assert response.status_code == 400

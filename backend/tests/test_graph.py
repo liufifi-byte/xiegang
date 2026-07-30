@@ -46,3 +46,5 @@ def test_graph_uses_two_to_three_dispute_driven_rounds():
     assert "select_divergent" not in nodes
     assert "select_chair" not in nodes
     assert "election" not in nodes
+    assert "clarification_gate" in nodes
+    assert "persist_clarification" in nodes

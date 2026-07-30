@@ -1,4 +1,5 @@
 import type { AgentTraceEvent, ParliamentSummary, TranscriptEntry } from "./types";
+import type { ClarificationQuestion } from "./types";
 
 export interface ParliamentStreamEvent {
   type:
@@ -6,6 +7,10 @@ export interface ParliamentStreamEvent {
     | "node_complete"
     | "agent_trace"
     | "expert_completed"
+    | "clarification_requested"
+    | "clarification_answered"
+    | "clarification_skipped"
+    | "clarification_resumed"
     | "parliament_done"
     | "cancelled"
     | "error";
@@ -33,6 +38,9 @@ export interface ParliamentStreamEvent {
   entry?: TranscriptEntry;
   completed_count?: number;
   total_count?: number;
+  questions?: ClarificationQuestion[];
+  clarification_status?: string;
+  answers?: Array<Record<string, unknown>>;
   payload?: {
     // state_update 子集（前端实际用到的）
     category?: string;
