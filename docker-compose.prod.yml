@@ -1,0 +1,69 @@
+# 邪杠会议室 - 腾讯云/阿里云轻量生产线部署
+# 用法 (在服务器上):
+#   scp 到服务器 /opt/xiegang/
+#   cd /opt/xiegang
+#   # 创建 .env 文件填好变量(从 .env.example 复制并填真实值)
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml logs -f worker
+
+# 这个 compose 在一台机器上同时起两个服务:
+# - web:   FastAPI(SSE)监听 8000 端口,nginx 反代到 80/443
+# - worker: 后台 worker_loop() 进程,抢队列跑议会
+# - nginx: 反代 + HTTPS(nginx 容器单独一个)
+
+version: "3.9"
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: xiegang-backend:latest
+    container_name: xiegang-web
+    restart: unless-stopped
+    env_file: .env
+    # 不直接暴露 8000,经 nginx 反代 80
+    expose:
+      - "8000"
+    networks:
+      - xiegang-net
+    depends_on: []
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: xiegang-backend:latest
+    container_name: xiegang-worker
+    restart: unless-stopped
+    env_file: .env
+    # 覆盖启动命令为 worker 模式
+    command: ["python", "-m", "app.worker"]
+    networks:
+      - xiegang-net
+
+  nginx:
+    image: nginx:alpine
+    container_name: xiegang-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+      - ./nginx/logs:/var/log/nginx
+    networks:
+      - xiegang-net
+    depends_on:
+      - web
+
+networks:
+  xiegang-net:
+    driver: bridge

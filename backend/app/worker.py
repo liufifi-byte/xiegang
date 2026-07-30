@@ -44,7 +44,7 @@ from app.runtime_context import (
 logger = logging.getLogger(__name__)
 
 # 单进程同时跑几场议会
-_MAX_CONCURRENT = 2
+_MAX_CONCURRENT = 5
 _WORKER_ID = f"worker-{uuid.uuid4().hex[:10]}"
 
 
@@ -117,11 +117,11 @@ async def _set_phase(parliament_id: str, phase: str) -> None:
 
 
 async def _cancel_abandoned_councils() -> int:
-    """Cancel councils whose browser lease expired, with refresh grace.
+    """Cancel councils whose browser lease expired.
 
-    P0 fix: 只取消 last_client_heartbeat 被设过且超过 60s 没刷新的议会。
-    POST 创建时不写 heartbeat（只在 SSE 连上后才写），避免刚创建就被误取消。
-    超时从 20s 放到 60s——给网络抖动留余地。
+    P0 fix: 关闭页面 → SSE 断开 → 15s 内无新 heartbeat → 立即取消。
+    比之前 60s 更激进——用户关闭页面就停（省 token）。
+    SSE 短暂断开（刷新/网络抖动）有 15s 恢复窗口。
     """
     def find() -> list[str]:
         with psycopg.connect(_clean_db_url(), connect_timeout=30) as conn:
@@ -132,7 +132,7 @@ async def _cancel_abandoned_councils() -> int:
                     FROM parliaments
                     WHERE status IN ('queued', 'running')
                       AND last_client_heartbeat IS NOT NULL
-                      AND last_client_heartbeat < now() - interval '60 seconds'
+                      AND last_client_heartbeat < now() - interval '15 seconds'
                       AND (
                         keep_alive_until IS NULL
                         OR keep_alive_until < now()

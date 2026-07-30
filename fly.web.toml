@@ -1,0 +1,38 @@
+# Fly.io 配置 - xiegang web service (FastAPI + SSE)
+# 使用根目录 Dockerfile,覆盖启动命令为 web 模式
+# 部署命令（在项目根目录执行）:
+#   fly deploy --config fly.web.toml --app xiegang-web
+#   (首次需 fly launch 先创建 app)
+
+app = "xiegang-web"
+primary_region = "hkg"   # 香港 - 国内访问最快
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8000        # Dockerfile EXPOSE 的端口
+  force_https = true
+  auto_stop_machines = true   # 空闲自动停（省钱，但首次唤醒慢 - Fly 免费层特性）
+  auto_start_machines = true
+  min_machines_running = 0    # 不留常驻 - 真免费
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 50           # 单实例最多 50 并发请求（SSE 长连接也算）
+    soft_limit = 25
+
+[[http_service.checks]]
+  grace_period = "30s"
+  interval = "30s"
+  method = "GET"
+  path = "/api/health"
+  timeout = "5s"
+
+# 启动命令：web 模式（覆盖 Dockerfile 的 CMD）
+[experimental]
+  cmd = ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+[[vm]]
+  size = "shared-cpu-1x"      # Fly 最小 VM（256MB RAM,1/8 vCPU）
+  memory = 512                # 256MB 跑 langgraph 可能内存紧张,提到 512

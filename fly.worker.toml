@@ -1,0 +1,22 @@
+# Fly.io 配置 - xiegang worker service（后台轮询任务）
+# 部署命令（在项目根目录执行）:
+#   fly deploy --config fly.worker.toml --app xiegang-worker
+#
+# Worker 不暴露 HTTP 端口（Background Worker），不需要 health check
+# worker_loop() 内置心跳: 每 5s 写 worker_heartbeats 表自报存活
+
+app = "xiegang-worker"
+primary_region = "hkg"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Background worker：不需要 http_service,不需要公开域名
+# auto_stop_machines 必须为 false（worker 进程不能睡,否则没人抢任务）
+
+[experimental]
+  cmd = ["python", "-m", "app.worker"]
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = 512
