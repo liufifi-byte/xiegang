@@ -102,7 +102,8 @@ async def _one_endorsement(
                 result.recommend_target = alt
         return result
     except Exception as e:
-        logger.warning("专家 %s 推荐失败: %s", expert_id, e)
+        import traceback
+        logger.warning("专家 %s 推荐失败: %s\n%s", expert_id, e, traceback.format_exc()[-300:])
         return None
 
 
