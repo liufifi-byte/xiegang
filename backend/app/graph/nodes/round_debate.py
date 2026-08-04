@@ -14,7 +14,7 @@ import asyncio
 import time
 
 from app.llm import get_structured_llm
-from app.llm_concurrency import get_llm_semaphore
+from app.llm_concurrency import acquire_llm_slots
 from app.runtime_context import consume_user_interrupt
 from app.schemas.member import MemberStatement
 from app.agents.profiles import (
@@ -54,8 +54,9 @@ DEBATE_PROMPT = """你是 Decision Council 的{member_name}。
 - 事实、计算和推断假设必须明确区分
 - 没有可核验来源时不得生成精确市场数据或历史统计
 - 可以调整立场，但必须说明是哪条新信息改变了判断
+- 当对方的证据比你的更可靠、或指出你忽略的关键变量时，**必须**承认——这是专业判断的演化，不是人格缺陷。被说服的发言比硬挺到底更有价值。
 - 不能重复前面已经说过的内容
-- 模仿职业范例的锐度、结构和人格张力，但绝不能复制范例中的数字、年份和事实
+- 模仿职业范例的锐度和判断密度，但绝不能复制范例中的数字、年份和事实；禁止戏剧化比喻与情感操控词
 - 不要用“各有利弊、因人而异、建议综合考虑”代替专业判断
 
 ## 输出要求
@@ -122,7 +123,10 @@ async def _debate_one_member_async(
 - 补充一项新证据或新推理
 - 指出事实判断与价值排序的区别
 - 提出一个可执行替代方案
-结尾说明这次回应是否改变了你的立场。"""
+结尾**必须**说明这次回应是否改变了你的立场，并给出两种范例模板之一：
+  被说服时：「我前一轮过于强调 X，但 [议员名] 的 Y 证据让我调整立场至 [for/against/neutral]」
+  仍坚持时：「[议员名] 的 Z 不能改变我的判断，因为它低估了 [我的核心证据]」
+但真诚优先：确认被说服就调整，不要为了显得稳健而硬撑旧立场。"""
     else:
         round_rules = """这是第三轮收敛与压力测试，正文 150-250 字。不得重复前两轮，必须说明：
 - 剩余分歧属于事实、推理还是价值选择
@@ -144,14 +148,14 @@ async def _debate_one_member_async(
         prompt += INTERRUPT_PROMPT_BLOCK.format(user_interrupt=user_interrupt)
 
     structured = get_structured_llm(MemberStatement, temperature=0.7)
-    sem = get_llm_semaphore()
-    async with sem:
+    # 公平分槽：与 parallel_research lock-ordering 一致（先全局后议会）
+    async with acquire_llm_slots(parliament_id):
         # V2-S2: 真异步 + cancel_guard
         from app.cancel_guard import guard_ainvoke
         return await guard_ainvoke(
             parliament_id=parliament_id or "_no_parliament",
             coro=structured.ainvoke(prompt),
-            timeout=120,  # 单 LLM 调用硬上限 120s（含 web search 耗时）
+            timeout=150,  # 单 LLM 调用硬上限（含 GLM 慢响应；HTTP 90s + 余量）
         )
 
 
@@ -193,19 +197,58 @@ async def _debate_member_safe(
     user_interrupt: str | None = None,
     parliament_id: str | None = None,
 ) -> dict:
-    """包装，单议员失败不影响别人。"""
+    """包装，单议员失败不影响别人。
+
+    日志：在原有 logger.warning 基础上再补一份结构化 print，
+    覆盖 OK / TIMEOUT / CANCELLED / ERROR 四类，方便后端控制台快速 grep。
+    用于排查"该专家本轮调研未完成"这种脑补兜底文（往往因为前一阶段 transcript 里
+    带了 [RESEARCH ERROR] 占位，模型看着没数据可辩就自行补一句）。
+    """
+    import asyncio as _asyncio
     import logging
+    import time as _time
+    import traceback
+
     logger = logging.getLogger(__name__)
+    t0 = _time.time()
     try:
         stmt = await _debate_one_member_async(
             mid, name, role, topic, variables, next_round,
             history_str, user_interrupt, parliament_id,
         )
+        dur = _time.time() - t0
+        print(
+            f"[debate] OK  parliament={parliament_id} member={mid} "
+            f"round={next_round} dur={dur:.1f}s stance={stmt.stance} "
+            f"conf={stmt.confidence:.2f}",
+            flush=True,
+        )
         return {"ok": True, "data": stmt}
+    except _asyncio.TimeoutError as e:
+        dur = _time.time() - t0
+        print(
+            f"[debate] TIMEOUT  parliament={parliament_id} member={mid} "
+            f"round={next_round} dur={dur:.1f}s (>120s cancel_guard 砍断) err={e!r}",
+            flush=True,
+        )
+        return {"ok": False, "error": f"{type(e).__name__}: {e}", "speaker": mid, "round": next_round}
+    except _asyncio.CancelledError as e:
+        dur = _time.time() - t0
+        print(
+            f"[debate] CANCELLED  parliament={parliament_id} member={mid} "
+            f"round={next_round} dur={dur:.1f}s err={e!r}",
+            flush=True,
+        )
+        return {"ok": False, "error": f"{type(e).__name__}: {e}", "speaker": mid, "round": next_round}
     except Exception as e:
-        import traceback
+        dur = _time.time() - t0
         tb = traceback.format_exc()
         logger.warning("议员 %s 第 %d 轮辩论失败:\n%s", mid, next_round, tb)
+        print(
+            f"[debate] ERROR  parliament={parliament_id} member={mid} "
+            f"round={next_round} dur={dur:.1f}s type={type(e).__name__} err={e!r}",
+            flush=True,
+        )
         return {"ok": False, "error": f"{type(e).__name__}: {e}", "speaker": mid, "round": next_round}
 
 
@@ -301,23 +344,71 @@ async def run_debate_round(state: dict) -> dict:
             err = outcome["error"]
             speaker = outcome.get("speaker", "?")
             speaker_name = member_info.get(speaker, ("该专家", ""))[0]
-            new_entries.append({
-                "speaker": "system",
-                "round": next_round,
-                "type": "debate_error",
-                "stance": "neutral",
-                "content": f"{speaker_name}本轮未及时回应，会议继续进行。",
-                "evidence": [],
-                "confidence": 0.0,
-                "failed_speaker": speaker,
-            })
-            tool_calls_log.append({
-                "member": speaker,
-                "action": "debate_error",
-                "round": next_round,
-                "error": str(err),
-                "timestamp": time.time(),
-            })
+            err_str = str(err)
+
+            # P0 修：区分两类失败
+            # 1. 内容审核 (1301) / 真正的 LLM processed error → 议员写降级发言，不写"未及时回应"
+            #    （被审核是系统性的，重试也是同样结果；写出"我维持立场无新增"让会议能继续）
+            # 2. timeout / 网络抖动 → 真的是"未及时回应"
+            is_content_filtered = "1301" in err_str or "BadRequest" in err_str or "contentFilter" in err_str
+
+            if is_content_filtered:
+                # 用该议员上一轮的立场生成一个"维持立场"的降级发言
+                prev_entry = next(
+                    (e for e in reversed(new_transcript)
+                     if e.get("speaker") == speaker and e.get("content")),
+                    None,
+                )
+                prev_stance = (prev_entry or {}).get("stance", "neutral")
+                stance_label = {
+                    "for": "支持", "against": "反对", "neutral": "保留意见"
+                }.get(prev_stance, "保留意见")
+                fallback_text = (
+                    f"{speaker_name}：受到平台内容审核限制无法展开新的论证，"
+                    f"我维持此前{stance_label}的立场。"
+                )
+                new_entries.append({
+                    "speaker": speaker,
+                    "round": next_round,
+                    "type": "debate_degraded",
+                    "stance": prev_stance,
+                    "content": fallback_text,
+                    "evidence": [],
+                    "confidence": 0.3,
+                    "degraded": True,
+                    "degradation_reason": "content_filtered_1301",
+                })
+                tool_calls_log.append({
+                    "member": speaker,
+                    "action": "debate_degraded_content_filter",
+                    "round": next_round,
+                    "error": err_str[:200],
+                    "timestamp": time.time(),
+                })
+                print(
+                    f"[debate] CONTENT_FILTER (1301) parliament={parliament_id} "
+                    f"member={speaker} round={next_round} → 标 degraded 继续",
+                    flush=True,
+                )
+            else:
+                # timeout / 网络 / 其他真 exception：按原有"未及时回应"
+                new_entries.append({
+                    "speaker": "system",
+                    "round": next_round,
+                    "type": "debate_error",
+                    "stance": "neutral",
+                    "content": f"{speaker_name}本轮未及时回应，会议继续进行。",
+                    "evidence": [],
+                    "confidence": 0.0,
+                    "failed_speaker": speaker,
+                })
+                tool_calls_log.append({
+                    "member": speaker,
+                    "action": "debate_error",
+                    "round": next_round,
+                    "error": str(err),
+                    "timestamp": time.time(),
+                })
 
     # 张力
     stances = [e["stance"] for e in new_entries if e.get("stance")]

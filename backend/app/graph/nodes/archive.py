@@ -17,6 +17,14 @@ def run_archive(state: dict) -> dict:
     supabase = get_supabase()
     parliament_id = state.get("parliament_id")
 
+    # 释放本议会的 per-parliament LLM semaphore 缓存（公平分槽清理）
+    if parliament_id:
+        try:
+            from app.llm_concurrency import clear_per_parliament_semaphore
+            clear_per_parliament_semaphore(parliament_id)
+        except Exception:
+            pass
+
     if not parliament_id:
         return {"finished_at": time.time()}
 

@@ -71,9 +71,32 @@ def build_reason_prompt(
     harness: AgentHarness,
     *,
     force_finish: bool = False,
+    duty_hint: str | None = None,
+    force_stance: str | None = None,
 ) -> str:
     observations = state.get("observations", [])
     current_date = date.today().isoformat()
+
+    # 议会职责段（duties 之前是 dead code——现在激活让它真正影响立场倾向）
+    duty_block = ""
+    if duty_hint:
+        duty_block = f"""
+## 你的议会职责
+你本场被分配到【{duty_hint}】职责。请让此职责引导你的审查重点和初始立场倾向。
+职责只改变审查重点，不覆盖你的职业人格。
+"""
+    # 强制立场（用于重跑扎堆时引导分散；不强制具体 thesis，只要求 stance 方向）
+    force_stance_block = ""
+    if force_stance:
+        stance_zh = {"for": "支持", "against": "反对", "neutral": "暂不作绝对判断"}.get(force_stance, force_stance)
+        force_stance_block = f"""
+## 立场要求（本轮重新审查）
+本次议会总体立场分布过于集中，需要你从【{duty_hint}】职责的视角重新审视后，把 stance 调整为「{stance_zh}」。
+- 基于你已有的证据/假设给出能支撑此立场的条件判断
+- 不得编造事实，证据不足时明确说明是 conditional / neutral
+- 你的 thesis 必须围绕这个立场的核心论证展开，而不是回避
+"""
+
     return f"""你是 Decision Council 的{profile.display_name}，正在执行一次有边界的自主调研。
 
 ## 目标
@@ -95,10 +118,14 @@ def build_reason_prompt(
 ## 表达方式
 {'; '.join(profile.communication_style)}
 
-## 你的腔调范例
-模仿以下发言的锐度和人格张力，但不要照搬具体内容：
-{chr(10).join(profile.voice_examples)}
+## 表达克制
+- 禁止戏剧化比喻（"自断后路"、"防御性自杀"、"达摩克利斯之剑"等）和情感操控词。
+- 保持专业冷静，中性陈述事实与推论；锐度来自事实力度，不来自修辞。
 
+## 你的腔调范例
+模仿以下发言的锐度和判断密度，但不要照搬具体内容，也不要复制其修辞风格：
+{chr(10).join(profile.voice_examples)}
+{duty_block}{force_stance_block}
 ## 必须检查
 {'; '.join(profile.required_questions)}
 
@@ -120,7 +147,7 @@ Tools: {max(0, harness.budget.max_tool_calls - harness.budget.tool_calls_used)}
 你可以不给出确定的支持或反对，但必须给出清晰的条件判断和结论反转条件。
 如果需要外部事实、计算或用户历史，选择一个允许的工具并自行生成参数。
 如果信息已经足够，返回 action=finish 和完整结果。
-最终 thesis 应为 180-280 字的核心专业判断；同时完整填写风险、假设、未知条件、翻转条件和下一步动作，供系统合成为 350-600 字的公开独立判断。
+最终 thesis 应为 180-280 字的核心专业判断；同时完整填写风险、假设、未知条件、翻转条件和下一步动作，供系统合成为 4 段公开独立判断。
 thesis 不要重复其他字段，不要为了篇幅编造事实。
 最终结果必须包含至少一个 reversal_conditions。
 {'工具已禁用，必须立即基于现有信息 finish。' if force_finish else ''}
@@ -133,10 +160,15 @@ class ExpertResearchGraph:
         profile: ExpertProfile,
         harness: AgentHarness,
         adapter: DecisionAdapter,
+        *,
+        duty_hint: str | None = None,
+        force_stance: str | None = None,
     ):
         self.profile = profile
         self.harness = harness
         self.adapter = adapter
+        self.duty_hint = duty_hint
+        self.force_stance = force_stance
 
     async def reason_node(self, state: ExpertAgentState) -> dict[str, Any]:
         step = await self.harness.before_reason()
@@ -147,6 +179,8 @@ class ExpertResearchGraph:
                 self.profile,
                 self.harness,
                 force_finish=force_finish,
+                duty_hint=self.duty_hint,
+                force_stance=self.force_stance,
             ),
             []
             if force_finish
@@ -220,7 +254,9 @@ class ExpertResearchGraph:
         try:
             decision = await self.adapter.decide(
                 build_reason_prompt(
-                    state, self.profile, self.harness, force_finish=True
+                    state, self.profile, self.harness, force_finish=True,
+                    duty_hint=self.duty_hint,
+                    force_stance=self.force_stance,
                 ),
                 [],
                 force_finish=True,

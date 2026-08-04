@@ -56,12 +56,16 @@ def test_election_pitch_schema_validates():
 
 
 def test_get_llm_returns_chat_model():
-    """验证 LLM 客户端构造 + 配置正确（不打 API）。"""
+    """验证 LLM 客户端构造 + 配置正确（不打 API）。
+    注：request_timeout 从 45s 提到 90s 应对 GLM 慢响应场景。
+    """
     from app.llm import get_llm
+    from app.config import get_settings
     llm = get_llm()
     assert llm.model_name == "glm-5"
     assert "bigmodel.cn" in str(llm.openai_api_base)
-    assert llm.request_timeout == 45.0
+    # 验证配置可改、且默认值为 90s（之前 45s 不够，已上调）
+    assert llm.request_timeout == get_settings().glm_request_timeout_seconds
     assert llm.max_retries == 0
 
 

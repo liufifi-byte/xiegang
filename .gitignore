@@ -26,3 +26,7 @@ outputs/
 .tmp_excel_quote/
 .superpowers/
 *.tsbuildinfo
+
+# 进程锁文件（运行时生成）
+backend/.worker.lock
+backend/.api.lock

@@ -167,21 +167,26 @@ def test_public_research_statement_combines_structured_analysis():
     for heading in (
         "【我的判断】",
         "【最关键的依据】",
-        "【我最担心的地方】",
-        "【当前假设与未知】",
+        "【风险与未知】",
         "【什么时候我会改变判断】",
-        "【你下一步应该做什么】",
     ):
         assert heading in content
+    # 4 段压缩后不再出现的旧标题（验证确实合并了）
+    assert "【我最担心的地方】" not in content
+    assert "【当前假设与未知】" not in content
+    assert "【你下一步应该做什么】" not in content
     assert "用户计划投入一半可用资金" in content
     assert "是否另有应急储备" in content
+    # assumptions 被并入 evidence 段
+    assert "核心假设" in content
 
 
 def test_parallel_research_runs_selected_expert_agents(monkeypatch):
     """Selected professional IDs switch the node to the ReAct agent path."""
     from app.graph.nodes import parallel_research as pr_module
 
-    async def fake_run(expert_id, state, registry, checkpointer=None):
+    async def fake_run(expert_id, state, registry, checkpointer=None,
+                        duty_hint=None, force_stance=None):
         return {
             "ok": True,
             "expert_id": expert_id,
@@ -233,7 +238,8 @@ def test_parallel_research_runs_selected_expert_agents(monkeypatch):
 def test_parallel_agent_research_isolates_single_failure(monkeypatch):
     from app.graph.nodes import parallel_research as pr_module
 
-    async def fake_run(expert_id, state, registry, checkpointer=None):
+    async def fake_run(expert_id, state, registry, checkpointer=None,
+                        duty_hint=None, force_stance=None):
         if expert_id == "artist":
             return {"ok": False, "expert_id": expert_id, "error": "timeout"}
         return {

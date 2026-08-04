@@ -20,11 +20,17 @@
 """
 import asyncio
 import contextlib
+import fcntl
+import hashlib
 import logging
+import os
 import re
+import signal
+import socket
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 import psycopg
 
@@ -45,7 +51,155 @@ logger = logging.getLogger(__name__)
 
 # 单进程同时跑几场议会
 _MAX_CONCURRENT = 5
-_WORKER_ID = f"worker-{uuid.uuid4().hex[:10]}"
+
+# ============================================================
+# 进程防呆：stable worker id（hostname + flock 路径 hash）
+# ============================================================
+_FLOCK_PATH = Path(os.environ.get(
+    "WORKER_LOCK_PATH",
+    str(Path(__file__).resolve().parent.parent / ".worker.lock"),
+))
+# 全局 flock 文件句柄（被 main() 拿住后保持打开，进程退出时自动释放）
+_worker_lock_fd: "int | None" = None
+
+
+def _stable_worker_id() -> str:
+    """稳定 worker id：同机器上多进程时，能看到彼此在 DB 里的心跳。
+
+    依据 hostname + flock 路径生成 hash 前缀；保留 uuid 后缀以区分同机多调试实例。
+    """
+    host = socket.gethostname() or "host"
+    digest = hashlib.sha1(f"{host}:{_FLOCK_PATH}".encode()).hexdigest()[:10]
+    return f"worker-{digest}-{uuid.uuid4().hex[:6]}"
+
+
+# 改成稳定 id（不再每次纯 uuid）
+_WORKER_ID = _stable_worker_id()
+
+
+# ============================================================
+# L1 进程锁：fcntl.flock 非阻塞抢占
+# ============================================================
+def acquire_worker_lock() -> bool:
+    """同机器 worker 单例保护。返回 True=拿到锁，False=已有 worker 在跑。
+
+    用 fcntl.LOCK_EX | LOCK_NB 非阻塞：拿不上立刻返回而不会阻塞进程。
+    flock 在 NFS / 跨容器上可能失效——L2 DB heartbeat 兜底。
+    """
+    if get_settings().worker_allow_duplicate:
+        logger.warning("WORKER_ALLOW_DUPLICATE=true，跳过 flock 防呆（仅调试用）")
+        return True
+
+    global _worker_lock_fd
+    try:
+        _FLOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(_FLOCK_PATH), os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # 写 pid 进去便于排查
+        os.write(fd, f"{os.getpid()}\n".encode())
+        os.lseek(fd, 0, os.SEEK_SET)
+        _worker_lock_fd = fd
+        return True
+    except (BlockingIOError, OSError) as exc:
+        logger.error(
+            "已有 worker 在跑（flock 抢占失败: %s）。"
+            "如确定要起，请先 kill 旧 worker 或删除 %s。"
+            "调试可设 WORKER_ALLOW_DUPLICATE=true 绕过。",
+            exc, _FLOCK_PATH,
+        )
+        return False
+
+
+def release_worker_lock() -> None:
+    """进程退出时释放 flock + 删除 DB heartbeat。幂等。"""
+    global _worker_lock_fd
+    if _worker_lock_fd is not None:
+        try:
+            fcntl.flock(_worker_lock_fd, fcntl.LOCK_UN)
+            os.close(_worker_lock_fd)
+        except OSError:
+            pass
+        _worker_lock_fd = None
+    # 删 DB heartbeat 行
+    try:
+        with psycopg.connect(_clean_db_url(), connect_timeout=10) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM worker_heartbeats WHERE worker_id = %s",
+                    (_WORKER_ID,),
+                )
+            conn.commit()
+    except Exception:
+        pass
+
+
+async def _worker_available_live() -> int:
+    """检查 DB 里有多少个活的 worker 心跳。供 L2 启动闸用。"""
+    def _do() -> int:
+        with psycopg.connect(_clean_db_url(), connect_timeout=10) as conn:
+            with conn.cursor() as cur:
+                # 排除自己（理论上启动时还没写心跳，但保险）
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FROM worker_heartbeats
+                    WHERE last_seen_at >= now() - interval '15 seconds'
+                      AND worker_id <> %s
+                    """,
+                    (_WORKER_ID,),
+                )
+                row = cur.fetchone()
+                return int(row[0]) if row else 0
+    try:
+        return await asyncio.to_thread(_do)
+    except Exception as exc:
+        logger.warning("worker_heartbeats 检查失败（降级放行）: %s", exc)
+        return 0
+
+
+async def _purge_zombie_heartbeats() -> int:
+    """清掉所有 >15s 未刷新的 heartbeat 行。
+
+    这些是被 SIGKILL 或异常退出时未走 release_worker_lock 留下的 zombie。
+    防止它们永久挡住下一个 worker 启动（L2 启动闸只看 15s 内的行）。
+    """
+    def _do() -> int:
+        with psycopg.connect(_clean_db_url(), connect_timeout=10) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM worker_heartbeats
+                    WHERE last_seen_at < now() - interval '15 seconds'
+                    """
+                )
+                cnt = cur.rowcount
+            conn.commit()
+            return cnt
+    try:
+        return await asyncio.to_thread(_do)
+    except Exception as exc:
+        logger.warning("zombie heartbeat 清理失败（继续）: %s", exc)
+        return 0
+
+
+async def _worker_singleton_guard() -> bool:
+    """L2 启动闸：DB 已有活 worker → 拒绝启动。返回 True=允许启动。
+
+    副作用：先清掉过期 zombie heartbeat，再判断；
+    这样新 worker 不会被上一个异常退出 worker 的过期心跳挡死。
+    """
+    if get_settings().worker_allow_duplicate:
+        return True
+    await _purge_zombie_heartbeats()
+    live = await _worker_available_live()
+    if live > 0:
+        logger.error(
+            "DB 检测到 %d 个活 worker 心跳，拒绝启动新 worker。"
+            "如确定要起：检查 worker_heartbeats 表是否有过期行未清理；"
+            "调试可设 WORKER_ALLOW_DUPLICATE=true。",
+            live,
+        )
+        return False
+    return True
 
 
 async def _cancel_when_requested(
@@ -286,6 +440,14 @@ async def _mark_terminal_status(
         logger.warning(
             "议会 %s 写入终态 %s 失败: %s", parliament_id, status, exc
         )
+    finally:
+        # 释放本议会的 per-parliament LLM semaphore 缓存（公平分槽清理）
+        # 所有终态路径都走这里：done / failed / cancelled，统一兜底
+        try:
+            from app.llm_concurrency import clear_per_parliament_semaphore
+            clear_per_parliament_semaphore(parliament_id)
+        except Exception:
+            pass
 
 
 async def run_one_parliament(task: dict) -> None:
@@ -440,22 +602,30 @@ async def run_one_parliament(task: dict) -> None:
 
 
 async def _reclaim_stale_tasks() -> int:
-    """启动扫描：把 running 但超期的标 failed。"""
+    """L3 orphan 自愈：把 running 但超期无心跳的议会标 failed。
+
+    阈值由 settings.parliament_stale_seconds 控制（默认 120s，原硬编码 900s）。
+    保留 status='running' AND finished_at IS NULL 双重过滤，避免误改历史完成/取消的议会。
+    """
     url = _clean_db_url()
+    threshold = get_settings().parliament_stale_seconds
 
     def _do():
         with psycopg.connect(url, connect_timeout=30) as conn:
             with conn.cursor() as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     UPDATE parliaments
                     SET status = 'failed',
                         error_message = 'worker_restart_reclaim',
                         finished_at = now()
                     WHERE status = 'running'
                       AND finished_at IS NULL
-                      AND started_at < now() - interval '15 minutes'
+                      AND started_at < now() - (%s || ' seconds')::interval
                     RETURNING id
-                """)
+                    """,
+                    (str(threshold),),
+                )
                 rows = cur.fetchall()
                 conn.commit()
                 return len(rows)
@@ -468,6 +638,10 @@ async def worker_loop() -> None:
         level=logging.INFO,
         format="%(asctime)s [worker] %(levelname)s %(name)s: %(message)s",
     )
+
+    # L2 启动闸：DB 已有活 worker → 拒绝启动
+    if not await _worker_singleton_guard():
+        return  # 拒绝启动（main() 的 finally 会释放 flock + 删 heartbeat）
 
     # 启动时回收卡死任务
     try:
@@ -482,47 +656,101 @@ async def worker_loop() -> None:
 
     logger.info("Worker 启动，并发上限 %d", _MAX_CONCURRENT)
     last_lease_sweep = 0.0
+    last_orphan_sweep = 0.0
+    orphan_sweep_interval = 30.0  # L3 主 loop 内每 30s 主动 reclaim orphan 议会
 
-    while True:
+    try:
+        while True:
+            try:
+                # 清理已完成的子 task
+                done = {t for t in running_tasks if t.done()}
+                running_tasks -= done
+                await _update_worker_heartbeat(len(running_tasks))
+                if time.monotonic() - last_lease_sweep >= 5:
+                    cancelled = await _cancel_abandoned_councils()
+                    if cancelled:
+                        logger.info("已取消 %d 场离站会议", cancelled)
+                    last_lease_sweep = time.monotonic()
+
+                # L3 主 loop 内定时 reclaim orphan 议会（不只启动时跑）
+                if time.monotonic() - last_orphan_sweep >= orphan_sweep_interval:
+                    try:
+                        reclaimed = await _reclaim_stale_tasks()
+                        if reclaimed > 0:
+                            logger.info(
+                                "主 loop 回收 %d 个 orphan 议会（>stale 阈值）",
+                                reclaimed,
+                            )
+                    except Exception as exc:
+                        logger.warning("主 loop orphan sweep 失败（继续）: %s", exc)
+                    last_orphan_sweep = time.monotonic()
+
+                # 并发未满才抢新任务
+                if len(running_tasks) >= _MAX_CONCURRENT:
+                    await asyncio.sleep(1)
+                    continue
+
+                task = await fetch_next_queued_parliament()
+                if task is None:
+                    await asyncio.sleep(2)
+                    continue
+
+                logger.info("抢到任务 parliament_id=%s", task["id"])
+
+                async def _run_with_semaphore(t):
+                    async with semaphore:
+                        await run_one_parliament(t)
+
+                new_task = asyncio.ensure_future(_run_with_semaphore(task))
+                running_tasks.add(new_task)
+
+            except Exception as e:
+                # P0-S2 fix: 任何 loop 迭代里的异常都不能让 worker 进程崩
+                logger.exception("worker_loop 迭代异常: %s", e)
+                await asyncio.sleep(5)  # 5s 退避，避免狂打 DB
+    finally:
+        # 进程退出（含 SIGTERM/SIGINT 触发的 CancelledError）时清理
+        # 正在跑的 task 留给 _reclaim_stale_tasks 在下次启动或本机其他 worker 处理
+        logger.info("Worker 退出，开始清理：删 DB heartbeat + 释放 flock")
         try:
-            # 清理已完成的子 task
-            done = {t for t in running_tasks if t.done()}
-            running_tasks -= done
-            await _update_worker_heartbeat(len(running_tasks))
-            if time.monotonic() - last_lease_sweep >= 5:
-                cancelled = await _cancel_abandoned_councils()
-                if cancelled:
-                    logger.info("已取消 %d 场离站会议", cancelled)
-                last_lease_sweep = time.monotonic()
-
-            # 并发未满才抢新任务
-            if len(running_tasks) >= _MAX_CONCURRENT:
-                await asyncio.sleep(1)
-                continue
-
-            task = await fetch_next_queued_parliament()
-            if task is None:
-                await asyncio.sleep(2)
-                continue
-
-            logger.info("抢到任务 parliament_id=%s", task["id"])
-
-            async def _run_with_semaphore(t):
-                async with semaphore:
-                    await run_one_parliament(t)
-
-            new_task = asyncio.ensure_future(_run_with_semaphore(task))
-            running_tasks.add(new_task)
-
-        except Exception as e:
-            # P0-S2 fix: 任何 loop 迭代里的异常都不能让 worker 进程崩
-            logger.exception("worker_loop 迭代异常: %s", e)
-            await asyncio.sleep(5)  # 5s 退避，避免狂打 DB
+            # 尽量取消正在跑的议会（让它们走 mark_finished 路径，
+            # 不行的会被新的 reclaim 逻辑在 120s 内清掉）
+            for t in list(running_tasks):
+                if not t.done():
+                    t.cancel()
+            # 给已取消任务一点时间走完 finally
+            if running_tasks:
+                await asyncio.sleep(0.5)
+        except Exception:
+            pass
 
 
 def main() -> None:
     """sync 入口（python -m app.worker 调）。"""
-    asyncio.run(worker_loop())
+    # L1 进程锁：同机器只允许一个 worker
+    if not acquire_worker_lock():
+        # 退出码 2 表示"已有进程在跑"，便于 scripts/dev.sh 判断
+        raise SystemExit(2)
+
+    # 注册信号 handler：SIGTERM/SIGINT 触发时释放资源
+    def _on_signal(signum, _frame):
+        logger.warning("收到信号 %s，开始清理后退出", signum)
+        release_worker_lock()
+        # asyncio.run 正在跑的话 CancelledError 会让 worker_loop finally 跑
+        raise SystemExit(0)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, _on_signal)
+        except (ValueError, OSError):
+            # 非 main thread 或 Windows 不全支持，忽略
+            pass
+
+    try:
+        asyncio.run(worker_loop())
+    finally:
+        # 兜底清理（无论正常结束、信号、异常）
+        release_worker_lock()
 
 
 if __name__ == "__main__":

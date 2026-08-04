@@ -135,7 +135,7 @@ def test_topic_specific_tools_have_different_queries(monkeypatch):
     from app.tools import topic_specific as ts
 
     captured = []
-    def fake_search(query, max_results=5):
+    def fake_search(query, max_results=5, **kwargs):
         captured.append(query)
         return []
 
@@ -158,7 +158,7 @@ def test_topic_specific_year_in_market_window(monkeypatch):
     from datetime import datetime
 
     captured = []
-    monkeypatch.setattr(ts, "web_search", lambda q, max_results=5: captured.append(q) or [])
+    monkeypatch.setattr(ts, "web_search", lambda q, max_results=5, **kw: captured.append(q) or [])
 
     ts.market_window_check("买房")
     assert str(datetime.now().year) in captured[0]
@@ -169,7 +169,7 @@ def test_topic_specific_sites_in_contrarian(monkeypatch):
     from app.tools import topic_specific as ts
 
     captured = []
-    monkeypatch.setattr(ts, "web_search", lambda q, max_results=5: captured.append(q) or [])
+    monkeypatch.setattr(ts, "web_search", lambda q, max_results=5, **kw: captured.append(q) or [])
 
     ts.contrarian_search("买房")
     assert "reddit" in captured[0] or "zhihu" in captured[0]

@@ -22,7 +22,7 @@ from app.agents.trace import AgentTraceSink
 from app.config import get_settings
 
 from app.llm import get_structured_llm
-from app.llm_concurrency import get_llm_semaphore
+from app.llm_concurrency import acquire_llm_slots
 from app.schemas.member import MemberStatement
 from app.tools.topic_specific import (
     contrarian_search,
@@ -139,16 +139,15 @@ async def _research_for_member_async(
 
     structured = get_structured_llm(MemberStatement, temperature=0.6)
 
-    # V2-S2: 真异步路径（去掉 to_thread），配合 cancel_guard 硬中断。
-    # 限速通过 semaphore 控制（V1-S2 已有，保留）。
-    sem = get_llm_semaphore()
-    async with sem:
+    # 公平分槽：先全局 semaphore（跨议会公平）再每议会 semaphore（议会内公平）。
+    # lock-ordering 与 round_debate 一致：先全局后议会，避免死锁。
+    async with acquire_llm_slots(parliament_id):
         # V2-S2: cancel_guard 包装
         from app.cancel_guard import guard_ainvoke
         stmt = await guard_ainvoke(
             parliament_id=parliament_id or "_no_parliament",
             coro=structured.ainvoke(prompt),
-            timeout=120,  # 单 LLM 调用硬上限 120s（含 web search 耗时）
+            timeout=150,  # 单 LLM 调用硬上限（含 GLM 慢响应；HTTP 90s + 余量）
         )
     # 把真实工具调用 record 夹带返回（不影响 MemberStatement 类型，
     # 调用方负责处理）
@@ -275,13 +274,54 @@ async def _research_for_member_safe(
     parliament_id: str | None = None,
     memories: str = "（暂无相关历史记忆）",
 ) -> dict:
-    """包装 async 调研，捕获异常返回 dict（避免单点失败拖垮 gather）。"""
+    """包装 async 调研，捕获异常返回 dict（避免单点失败拖垮 gather）。
+
+    日志：记录每个议员的耗时、成功/失败、失败的具体异常类型与文本——
+    用于排查"本轮调研未完成"这种由 placeholder 占位 + 后续 LLM 脑补出来的兜底文。
+    最常见真凶是 cancel_guard 的 120s timeout，其次是 LLM SDK / JSON parse / 网络。
+    """
+    import asyncio as _asyncio
+    import time as _time
+
+    t0 = _time.time()
     try:
         stmt, tool_call_records = await _research_for_member_async(
             member_id, topic, variables, parliament_id, memories
         )
+        dur = _time.time() - t0
+        print(
+            f"[research] OK  parliament={parliament_id} member={member_id} "
+            f"dur={dur:.1f}s stance={stmt.stance} conf={stmt.confidence:.2f} "
+            f"evidence_n={len(stmt.evidence)} tools={len(tool_call_records)}",
+            flush=True,
+        )
         return {"ok": True, "data": stmt, "tool_calls": tool_call_records}
+    except _asyncio.TimeoutError as e:
+        dur = _time.time() - t0
+        # cancel_guard 的 wait_for(timeout=120) 到点
+        print(
+            f"[research] TIMEOUT  parliament={parliament_id} member={member_id} "
+            f"dur={dur:.1f}s (>120s 预算，cancel_guard 砍断) err={e!r}",
+            flush=True,
+        )
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    except _asyncio.CancelledError as e:
+        dur = _time.time() - t0
+        # 用户主动 cancel 或 cancel_all_inflight 触发
+        print(
+            f"[research] CANCELLED  parliament={parliament_id} member={member_id} "
+            f"dur={dur:.1f}s err={e!r}",
+            flush=True,
+        )
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
     except Exception as e:
+        dur = _time.time() - t0
+        # 其他真 exception：LLM SDK / JSON parse / pydantic 校验 / 网络等
+        print(
+            f"[research] ERROR  parliament={parliament_id} member={member_id} "
+            f"dur={dur:.1f}s type={type(e).__name__} err={e!r}",
+            flush=True,
+        )
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
@@ -290,6 +330,8 @@ async def _run_one_expert_safe(
     state: dict,
     registry: ToolRegistry,
     checkpointer=None,
+    duty_hint: str | None = None,
+    force_stance: str | None = None,
 ) -> dict:
     """Run one professional agent without allowing a single failure to fan out."""
     settings = get_settings()
@@ -325,6 +367,8 @@ async def _run_one_expert_safe(
         category=state.get("category") or "general",
         sensitive_values=state.get("briefing", {}).get("sensitive_values", []),
         cancel_check=cancel_check,
+        duty_hint=duty_hint,
+        force_stance=force_stance,
     )
     user_brief = {
         "summary": state.get("briefing", {}).get("summary", state["topic"]),
@@ -332,6 +376,8 @@ async def _run_one_expert_safe(
         "background": state.get("user_background") or "（用户未提供额外背景）",
     }
     try:
+        import time as _time
+        _t0 = _time.time()
         result_state = await asyncio.wait_for(
             runner.run(
                 goal=state["topic"],
@@ -340,8 +386,68 @@ async def _run_one_expert_safe(
             ),
             timeout=settings.agent_total_timeout_seconds + 5,
         )
+        _dur = _time.time() - _t0
+        # ReAct runner 跑通的细粒度日志
+        _final = result_state.get("final_result") or {}
+        _ev = len(result_state.get("evidence_ledger", []))
+        _eph = len(result_state.get("safe_action_history", []))
+        _hint = f" duty={duty_hint}" if duty_hint else ""
+        _force = f" force={force_stance}" if force_stance else ""
+        print(
+            f"[agent] OK       parliament={parliament_id} expert={expert_id} "
+            f"dur={_dur:.1f}s stance={_final.get('stance')} "
+            f"conf={_final.get('confidence')} evidence={_ev} tool_calls={_eph}{_hint}{_force}",
+            flush=True,
+        )
         return {"ok": True, "expert_id": expert_id, "state": result_state}
+    except asyncio.TimeoutError as exc:
+        _dur = _time.time() - _t0
+        # 超过 agent_total_timeout_seconds + 5，runner 整轮被砍
+        print(
+            f"[agent] TIMEOUT  parliament={parliament_id} expert={expert_id} "
+            f"dur={_dur:.1f}s (>{settings.agent_total_timeout_seconds}s 预算被砍) "
+            f"trace_events={len(trace_sink.events)} err={exc!r}",
+            flush=True,
+        )
+        try:
+            await runner.harness.failed()
+        except Exception:
+            pass
+        return {
+            "ok": False,
+            "expert_id": expert_id,
+            "error": f"{type(exc).__name__}: {exc} (totaled {settings.agent_total_timeout_seconds}s)",
+            "trace_events": [
+                event.model_dump(mode="json") for event in trace_sink.events
+            ],
+        }
+    except asyncio.CancelledError as exc:
+        _dur = _time.time() - _t0
+        print(
+            f"[agent] CANCELLED parliament={parliament_id} expert={expert_id} "
+            f"dur={_dur:.1f}s err={exc!r}",
+            flush=True,
+        )
+        try:
+            await runner.harness.failed()
+        except Exception:
+            pass
+        return {
+            "ok": False,
+            "expert_id": expert_id,
+            "error": f"{type(exc).__name__}: {exc}",
+            "trace_events": [
+                event.model_dump(mode="json") for event in trace_sink.events
+            ],
+        }
     except Exception as exc:
+        _dur = _time.time() - _t0
+        # LLM 限流/JSON 解析/工具异常等。最常见：1302/1305/429 通过 Semaphore 没拿到额度。
+        print(
+            f"[agent] ERROR    parliament={parliament_id} expert={expert_id} "
+            f"dur={_dur:.1f}s type={type(exc).__name__} err={exc!r}",
+            flush=True,
+        )
         try:
             await runner.harness.failed()
         except Exception:
@@ -449,18 +555,23 @@ def _render_public_research_statement(
     if result.degraded and result.degradation_reason:
         unknowns.append(result.degradation_reason)
 
+    # 改造 4：6 段 → 4 段，密度优先于铺张结构。
+    # 把 assumptions 并入【依据】，key_risks 与 unknowns 合并到【风险与未知】，
+    # 去掉"下一步动作"段（移到纪要阶段处理），让单段发言更紧凑、更易读。
+    if result.assumptions:
+        assumption_text = f" 核心假设：{_format_list(result.assumptions, '')}。"
+        evidence_text = evidence_text + assumption_text
+
+    risk_pieces = list(result.key_risks)
+    if unknowns:
+        risk_pieces.append("仍需确认：" + _format_list(unknowns, ""))
+
     return "\n\n".join(
         (
             f"【我的判断】{stance_label}。{result.thesis.strip()}",
             f"【最关键的依据】{evidence_text}。",
-            f"【我最担心的地方】{_format_list(result.key_risks, '关键下行风险仍需结合用户实际承受能力确认')}。",
-            (
-                "【当前假设与未知】"
-                f"{_format_list(result.assumptions, '未使用额外假设')}；"
-                f"仍需确认：{_format_list(unknowns, '暂无额外未知条件')}。"
-            ),
+            f"【风险与未知】{_format_list(risk_pieces, '关键下行风险仍需结合用户实际承受能力确认')}。",
             f"【什么时候我会改变判断】{_format_list(result.reversal_conditions, '关键条件发生实质变化时重新评估')}。",
-            f"【你下一步应该做什么】{_format_list(result.next_actions, '补充最影响结论的事实后重新比较方案')}。",
         )
     )
 
@@ -486,9 +597,17 @@ async def _parallel_agent_research(state: dict) -> dict:
     research_entries: list[dict] = []
     successes = 0
 
+    # 计算议会职责（之前是 dead code——现在通过 duty_hint 注入到 prompt）
+    from app.agents.profiles import assign_parliament_duties, DUTY_STANCE_HINT
+    duties = assign_parliament_duties(selected, state.get("category"))
+    print(f"[research] duties={duties}", flush=True)
+
     tasks = [
         asyncio.create_task(
-            _run_one_expert_safe(expert_id, state, registry, checkpointer)
+            _run_one_expert_safe(
+                expert_id, state, registry, checkpointer,
+                duty_hint=DUTY_STANCE_HINT.get(duties.get(expert_id, "")),
+            )
         )
         for expert_id in selected
     ]
@@ -592,6 +711,76 @@ async def _parallel_agent_research(state: dict) -> dict:
                 pass
 
     insufficient = successes < 3
+
+    # ============ 立场分布检测 + 重跑（避免 4/5 扎堆同立场）===========
+    # duties 已分配但只靠 prompt hint 引导。如果 5 人最终仍扎堆到 ≥4 同立场，
+    # 找出"职责与扎堆立场冲突"的专家，强制 force_stance 重跑一次。
+    # 这里的 trade-off：重跑成本 = 单 Agent 60-90s。只在最坏情况下做。
+    if len(members) >= 4:
+        from collections import Counter
+        stance_counts = Counter(
+            m["stance"] for m in members.values() if m.get("stance")
+        )
+        dominant_stance, dominant_count = stance_counts.most_common(1)[0]
+
+        if dominant_count >= 4:
+            from app.agents.profiles import DUTY_DESIRED_STANCE
+            # 找 duty desires != dominant_stance 的、且目前是 dominant 的专家
+            candidates = [
+                (eid, duties.get(eid))
+                for eid in list(members.keys())
+                if members[eid].get("stance") == dominant_stance
+                and duties.get(eid)
+                and DUTY_DESIRED_STANCE.get(duties[eid]) != dominant_stance
+            ]
+            rebalanced = 0
+            for eid, duty in candidates[:2]:  # 最多重跑 2 个
+                target_stance = DUTY_DESIRED_STANCE[duty]
+                print(
+                    f"[research] REBALANCE {eid}: {dominant_stance} 扎堆，"
+                    f"duty={duty} 期望 {target_stance}，强制重跑",
+                    flush=True,
+                )
+                rebal_outcome = await _run_one_expert_safe(
+                    eid, state, registry, checkpointer,
+                    duty_hint=DUTY_STANCE_HINT.get(duty),
+                    force_stance=target_stance,
+                )
+                if rebal_outcome["ok"]:
+                    r_state = rebal_outcome["state"]
+                    r_result = ExpertResearchResult.model_validate(
+                        r_state["final_result"]
+                    )
+                    if r_result.stance != dominant_stance:
+                        new_ev = r_state.get("evidence_ledger", [])
+                        new_member = _agent_result_to_member(eid, r_result, new_ev)
+                        new_member["reasoning_summary"] = (
+                            _render_public_research_statement(r_result, new_ev)
+                        )
+                        members[eid] = new_member
+                        agent_results[eid] = {
+                            "result": r_result.model_dump(mode="json"),
+                            "evidence": new_ev,
+                            "metrics": r_state.get("metrics", {}),
+                        }
+                        rebalanced += 1
+                        # 同步 research_entries 中该专家的条目
+                        for entry in research_entries:
+                            if entry.get("speaker") == eid:
+                                entry["stance"] = new_member["stance"]
+                                entry["confidence"] = new_member["confidence"]
+                                entry["content"] = new_member["reasoning_summary"]
+                                entry["evidence"] = new_member["evidence"]
+                                entry["position"] = new_member.get("position")
+                                entry["basis_level"] = new_member.get("basis_level", "limited")
+                                entry["degraded"] = new_member.get("degraded", False)
+                                break
+            if rebalanced:
+                print(
+                    f"[research] rebalance 完成，{rebalanced} 位专家调整了立场",
+                    flush=True,
+                )
+
     evidence_pool = list(state.get("evidence_pool", []))
     known_evidence_ids = {
         item.get("evidence_id") for item in evidence_pool if item.get("evidence_id")

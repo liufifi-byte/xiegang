@@ -1,5 +1,9 @@
 """组装 FastAPI app：所有路由 + CORS。"""
+import fcntl
 import logging
+import os
+import sys
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -58,3 +62,40 @@ async def api_root() -> dict:
             "GET  /api/parliament/{{id}}/stream   — SSE 流",
         ]
     }
+
+
+# ============================================================
+# API 进程单例锁：防止两个 uvicorn 进程都来跑这个模块（同机器时常见 tap）
+# uvicorn --reload 模式下 reload watcher 会 import 这个模块两次，所以只锁 real worker
+# process（看 sys.argv 是否含 "--reload" 来分辨）。--reload 模式下跳过锁。
+# ============================================================
+def _acquire_api_lock_or_exit() -> None:
+    """同机器只允许一个 uvicorn worker 跑 api。失败时 sys.exit 非 0。"""
+    if settings.worker_allow_duplicate:  # 复用同一个开关
+        return
+    # uvicorn --reload 会有 reloader 子进程也 import 本模块，跳过
+    if "--reload" in sys.argv or any("reload" in a for a in sys.argv):
+        return
+
+    lock_path = Path(os.environ.get(
+        "API_LOCK_PATH",
+        str(Path(__file__).resolve().parent.parent / ".api.lock"),
+    ))
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.write(fd, f"api pid={os.getpid()}\n".encode())
+        # fd 故意保持打开不 close——进程退出时 OS 自动释放 flock
+        globals()["_api_lock_fd"] = fd
+    except (BlockingIOError, OSError) as exc:
+        logging.error(
+            "已有 API 进程在跑（.api.lock 抢占失败: %s）。"
+            "如确定要起，请先 kill 旧 uvicorn 或删除 %s。"
+            "调试可设 WORKER_ALLOW_DUPLICATE=true。",
+            exc, lock_path,
+        )
+        raise SystemExit(3)
+
+
+_acquire_api_lock_or_exit()

@@ -65,9 +65,9 @@ EXPERT_PROFILES: dict[str, ExpertProfile] = {
         ),
         professional_boundaries=("不得把金钱当成唯一价值", "不得把市场价格等同于个人价值"),
         voice_examples=(
-            "「全押进去是对你自己未来的不尊重。我从不建议任何人把超过 20% 净资产押在单一资产上。分散和全押的差距不是收益，而是 100% 概率你能再来一次。」",
+            "「把超过 60% 净资产押在单一资产上，风险管理上不可接受。分散与全押的差距不是收益，而是 100% 概率能再来一次的能力。」",
             "「不买房的真实成本不是少赚的房价涨——是每月房租 × 10 年机会成本。你把每月 1 万 5 房租存进指数基金，每年回报 8%，10 年后是 274 万。这套预期涨幅跑赢吗？」",
-            "「你说的'损失可控'是真的吗？你的实际成本不只是 200 万本金，还有这 5 年的流动性（你无法用这笔钱做别的）、时间精力、以及退出时的折价。」",
+            "「你说的'损失可控'需要拆解：实际成本不只是本金，还有这 5 年的流动性、时间精力、以及退出时的折价。」",
         ),
     ),
     "psychologist": ExpertProfile(
@@ -83,9 +83,9 @@ EXPERT_PROFILES: dict[str, ExpertProfile] = {
         allowed_tools=("web_search", "memory_search"),
         signature_line="这是你真正想要的，还是你害怕失去的？",
         communication_style=(
-            "你温和但锋利——先复述用户真正的需要，然后一刀切到自我欺骗上。",
+            "你温和但锋利——先复述用户真正的需要，然后指出自我欺骗。",
             "不允许用户用'我只是理性分析'包装情绪动机。",
-            "敢于说'你妻子反对的不是房子，是你的犹豫——你丈夫不是不在乎 XYZ，而是你没听懂他真正想说什么。",
+            "你敢于说出'你真正需要的是 X，而非你正在考虑的 Y'——但用观察而非评判。",
         ),
         professional_boundaries=("不得进行医学诊断", "不得替用户定义感受或价值"),
         voice_examples=(
@@ -155,9 +155,9 @@ EXPERT_PROFILES: dict[str, ExpertProfile] = {
         allowed_tools=("web_search", "memory_search"),
         signature_line="谁真正握有筹码，你还能谈什么？",
         communication_style=(
-            "你说话像谈判高手——直接，挑明各方利益，不让话术掩盖冲突。",
+            "你说话像谈判高手——直接挑明各方利益，不让话术掩盖冲突。",
             "永远把'决定'翻译成'一系列谈判'——每个相关者的利益/筹码/可谈条件写在桌面上。",
-            "指出'你做不到'的事实——不做粉饰。",
+            "指出真实约束——措辞克制但内容不粉饰。",
         ),
         professional_boundaries=("不得把所有关系解释为算计", "不得把操纵包装成谈判"),
         voice_examples=(
@@ -212,6 +212,29 @@ DUTY_LABELS = {
     "opportunity_scan": "机会识别",
     "long_term_path": "长期影响",
     "contrarian_challenge": "反方挑战",
+}
+
+# 议会职责 → 立场倾向 hint。
+# 用于把现在已分配但未传给 LLM 的 duties 激活，避免 5 个专家在同一立场扎堆。
+# 天然分散为：~1 neutral (evidence_audit) + 2 against (downside_risk,
+# contrarian_challenge) + 2 for/conditional (opportunity_scan, long_term_path)。
+# 专家仍可自由选择最终 stance，这只是初始倾向 hint。
+DUTY_STANCE_HINT: dict[str, str] = {
+    "evidence_audit": "默认暂不作绝对判断（neutral）——先把可核验的事实摆清楚再下结论；只在数据强支持某方向时才表态。",
+    "downside_risk": "从最坏情况与下行风险出发审查，倾向反对（against）；除非有清晰的安全垫和退出机制才转条件支持。",
+    "opportunity_scan": "从机会窗口与时间成本出发，倾向支持（for）或条件支持；要明确错过窗口的代价。",
+    "long_term_path": "从 10 年以上复利与身份认同出发，倾向支持（for）或条件支持；当心短期成本对长期路径的扭曲。",
+    "contrarian_challenge": "质疑主流共识，倾向反对（against）；要找共识里被忽视的盲点和历史被反复打脸的相似叙事。",
+}
+
+# 反向 hint（用于重跑扎堆立场时给"应当转变方向"的专家）：
+# 当 5 人 4 against 时，需要把有人转去 for；当 4 for 时反之。
+DUTY_DESIRED_STANCE: dict[str, str] = {
+    "evidence_audit": "neutral",
+    "downside_risk": "against",
+    "opportunity_scan": "for",
+    "long_term_path": "for",
+    "contrarian_challenge": "against",
 }
 
 

@@ -60,6 +60,22 @@ class Settings(BaseSettings):
     # LangGraph checkpoint（本地联调可通过环境变量关闭，生产默认开启）
     langgraph_checkpointer_enabled: bool = True
 
+    # ============================================================
+    # Worker 进程防呆 + orphan 自愈 + 公平分槽
+    # ============================================================
+    # L1/L2 重复 worker 调试开关：true 时跳过 flock + DB heartbeat 启动闸
+    # （只用于本机需要同时跑多个 worker 联调时）
+    worker_allow_duplicate: bool = False
+
+    # L3 orphan 自愈阈值（秒）：超过这个时间无 heartbeat 的 running 议会被认作 orphan，
+    # 在 worker_loop 内每 30s 扫一次。原硬编码 900s（15 分钟）会让卡死的议会等太久。
+    parliament_stale_seconds: int = 120
+
+    # 每议会公平分槽：单议会内同时飞的最大 LLM 请求数。
+    # 配合全局 LLM_MAX_CONCURRENCY 实现"跨议会公平 + 议会内公平"。
+    # 例：全局 5 + 每议会 2 → 两议会各占 2 槽，剩 1 槽给 summary/election 等单点调用。
+    per_parliament_llm_concurrency: int = 2
+
 
 @lru_cache
 def get_settings() -> Settings:

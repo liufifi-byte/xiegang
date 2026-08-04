@@ -119,10 +119,6 @@ export function ExpertSeatPanel({
           );
         })}
       </div>
-      <div className="mt-7 rounded-xl border border-[#eadfd9] bg-[#fffaf6] p-3 text-[11px] leading-5 text-[#766b73]">
-        <strong className="block text-[#4b1c62]">Agent 实况</strong>
-        只展示专家做了什么、找到什么；详细证据可展开查看，不展示内部思维链。
-      </div>
     </aside>
   );
 }
