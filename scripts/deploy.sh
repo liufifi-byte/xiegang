@@ -16,9 +16,18 @@
 set -e
 cd "$(dirname "$0")/.."
 
-echo "===== [1/5] git pull main ====="
-git fetch origin main
-git reset --hard origin/main
+echo "===== [1/5] 同步 main 代码 ====="
+# 国内服务器通常无法 pull GitHub private repo。
+# 先尝试 git pull(在有凭据或 HTTPS 凭据 helper 时);失败则跳过(假设你已手动同步)。
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    origin_url=$(git config --get remote.origin.url 2>/dev/null || echo "")
+    if [ -n "$origin_url" ]; then
+        git fetch origin main 2>/dev/null && git reset --hard origin/main || \
+            echo "  ⚠️  git fetch 失败(国内访问 GitHub 受限),用本地 working tree 继续"
+    fi
+else
+    echo "  ⚠️  当前目录不是 git 仓库,继续用本地 working tree"
+fi
 
 echo ""
 echo "===== [2/5] 检查 .env 存在 ====="
