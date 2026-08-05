@@ -566,8 +566,9 @@ export default function ParliamentPage() {
     <main className="grid h-dvh min-h-0 grid-cols-[58px_minmax(0,1fr)] overflow-hidden bg-[#f5f3f1] text-[#2d2830] md:grid-cols-[64px_190px_minmax(0,1fr)] lg:grid-cols-[72px_220px_minmax(420px,1fr)_210px]">
       <aside className="flex flex-col items-center gap-4 bg-[#29212d] px-2 py-5">
         <img
-          src="/brand/xiegang-logo.png"
+          src="/brand/xiegang-logo.webp"
           alt="斜杠"
+          loading="lazy"
           className="h-8 w-12 object-cover object-center brightness-[1.7] saturate-75 mix-blend-screen"
         />
         <button

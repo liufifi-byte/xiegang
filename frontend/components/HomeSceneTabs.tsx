@@ -179,11 +179,12 @@ function BrandHeader() {
   return (
     <header className="pt-10 sm:pt-14 pb-10 text-center">
       <img
-        src="/brand/xiegang-logo.png"
+        src="/brand/xiegang-logo.webp"
         alt="斜杠"
-        width={1150}
-        height={520}
+        width={600}
+        height={270}
         className="mx-auto block h-auto w-[260px] max-w-[82vw] sm:w-[310px] mix-blend-multiply"
+        loading="eager"
       />
       <p className="mt-1 text-xs font-bold tracking-[0.14em] text-[#ec403d]">
         DECISION COUNCIL

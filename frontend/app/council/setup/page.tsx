@@ -114,9 +114,10 @@ export default function CouncilSetupPage() {
       <main className="grid min-h-screen place-items-center bg-[#fffaf6] px-6 text-[#251536]">
         <div className="max-w-sm text-center">
           <img
-            src="/brand/xiegang-logo.png"
+            src="/brand/xiegang-logo.webp"
             alt="斜杠"
             className="mx-auto w-36 mix-blend-multiply"
+            loading="lazy"
           />
           <h1 className="mt-6 font-serif text-2xl">没有找到待讨论的问题</h1>
           <p className="mt-3 text-sm leading-6 text-[#746d78]">
@@ -145,9 +146,10 @@ export default function CouncilSetupPage() {
           ← <span className="hidden sm:inline">返回修改问题</span>
         </button>
         <img
-          src="/brand/xiegang-logo.png"
+          src="/brand/xiegang-logo.webp"
           alt="斜杠"
           className="h-10 w-[88px] object-cover object-center mix-blend-multiply sm:h-12 sm:w-[106px]"
+          loading="lazy"
         />
         <span className="justify-self-end text-xs font-bold tracking-[0.08em] text-[#978994]">
           <span className="hidden sm:inline">02 / </span>选择讨论者
