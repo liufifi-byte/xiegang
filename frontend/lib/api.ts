@@ -1,7 +1,10 @@
 import { getDeviceId } from "./device";
 import type { ClarificationQuestion } from "./types";
 
-const API_BASE = "/api";
+// 生产部署: 浏览器直连后端域名(绕开 Vercel 边缘到国内源站的国际不稳定链路)
+// 本地开发: 走同源 /api(被 next.config.js rewrites 反代到 127.0.0.1:8001)
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL ?? "/api";
 
 /** P0-S1.1: 构造统一 headers 含 X-Device-Id */
 function buildHeaders(extra: Record<string, string> = {}): Record<string, string> {
