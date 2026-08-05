@@ -65,9 +65,13 @@ export interface ParliamentStreamEvent {
  * 本地开发直接打 http://127.0.0.1:8001（绕开 Next.js dev rewrite
  * 对 SSE 的缓冲问题）。
  * 生产部署时通过 NEXT_PUBLIC_API_URL 环境变量覆盖。
+ *
+ * 注意：用 ?? 而非 || —— 避免生产环境显式设为空字符串
+ * (NEXT_PUBLIC_API_URL="") 时被 || 误判为 falsy 而取 localhost fallback，
+ * 导致线上访问 127.0.0.1:8001 失败。
  */
 const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8001";
+  process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8001";
 
 /**
  * 订阅议会 SSE 流。

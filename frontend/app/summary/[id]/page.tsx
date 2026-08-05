@@ -36,8 +36,11 @@ export default function SummaryPage() {
     setLoading(true);
     setError(null);
     try {
+      // 浏览器直连后端域名(绕开 Vercel 边缘到国内源站的国际不稳定链路)
+      // 本地开发走同源 ''(空字符串) → 由 next.config.js 的 rewrites 反代
+      const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "";
       const res = await fetch(
-        `/api/parliament/${parliamentId}?include_agent_traces=false`
+        `${apiBase}/api/parliament/${parliamentId}?include_agent_traces=false`
       );
       if (res.status === 404) {
         setError("议会不存在或已过期");

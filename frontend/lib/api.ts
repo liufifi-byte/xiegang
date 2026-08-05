@@ -95,7 +95,7 @@ export async function interruptParliament(
   parliamentId: string,
   content: string
 ): Promise<{ ok: boolean; queued_at: boolean }> {
-  const base = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8001";
+  const base = process.env.NEXT_PUBLIC_API_URL ?? "";
   const res = await fetch(
     `${base}/api/parliament/${parliamentId}/interrupt`,
     {
@@ -120,7 +120,7 @@ export async function submitClarification(
   clarification_status: "answered" | "skipped";
   already_submitted: boolean;
 }> {
-  const base = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8001";
+  const base = process.env.NEXT_PUBLIC_API_URL ?? "";
   const res = await fetch(
     `${base}/api/parliament/${parliamentId}/clarification`,
     {
@@ -140,7 +140,7 @@ export async function submitClarification(
 export async function cancelParliament(
   parliamentId: string
 ): Promise<{ ok: boolean; message: string }> {
-  const base = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8001";
+  const base = process.env.NEXT_PUBLIC_API_URL ?? "";
   const res = await fetch(
     `${base}/api/parliament/${parliamentId}/cancel`,
     { method: "POST", headers: buildHeaders() }
