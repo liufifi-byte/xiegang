@@ -6,6 +6,7 @@
 import asyncio
 import json
 import logging
+import os
 import time
 
 from fastapi import APIRouter, Request
@@ -61,20 +62,26 @@ async def stream_parliament(parliament_id: str, request: Request):
             return
 
         stored_device = row.get("device_id")
-        # P0-S2.3: 所有权校验（生产环境）
-        # 开发环境跳过——因为 EventSource API 不支持自定义 header，
-        # 加上 Next.js rewrite 不转发 X-Device-Id，导致开发时容易误拦
+        # P0-S2.3: 所有权校验
+        # ── 关键认知 ──
+        # 生产部署在 CDN(Cloudflare)+ 反代(nginx)后面时, EventSource API 又无法
+        # 发自定义 header; client permission/IP/UA 都不稳定. 这种所有权校验在
+        # 公网多层代理下不可靠, 比误拦正常用户的代价大得多.
+        # → 公网/open 模式: 关闭校验(让大家都能订阅).
+        # 真正的滥用防护靠 rate_limit middleware (IP+device 双轨限流) 来兜底.
+        # 仅在私域/known-device 场景才需要打开此校验, 那种场景留 environment
+        # variable ENABLE_STREAM_DEVICE_CHECK 控制.
         settings = get_settings()
-        if stored_device and settings.app_env != "development":
-            # CDN/反代下 X-Forwarded-For 是 CDN 节点 IP, 跟"提交议题"时的 client IP
-            # 不匹配; 改用 ?device_id=xxx 查询参数 (浏览器 EventSource 支持 query).
+        if (
+            stored_device
+            and settings.app_env != "development"
+            and os.environ.get("ENABLE_STREAM_DEVICE_CHECK") == "1"
+        ):
             request_device = (
                 request.query_params.get("device_id")
                 or request.headers.get("X-Device-Id")
                 or f"ip:{_get_client_ip(request)}"
             )
-            # 兼容 device_id 形如 "ip:xxx" 的宽松校验 (只要前缀相同就放行)
-            # 因为经过 CF 后 client IP 会改变, 严格校验不可行
             same_user = (
                 request_device == stored_device
                 or (stored_device.startswith("ip:") and request_device.startswith("ip:"))
