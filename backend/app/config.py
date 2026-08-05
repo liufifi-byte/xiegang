@@ -68,8 +68,8 @@ class Settings(BaseSettings):
     worker_allow_duplicate: bool = False
 
     # L3 orphan 自愈阈值（秒）：超过这个时间无 heartbeat 的 running 议会被认作 orphan，
-    # 在 worker_loop 内每 30s 扫一次。原硬编码 900s（15 分钟）会让卡死的议会等太久。
-    parliament_stale_seconds: int = 120
+    # 在 worker_loop 内每 30s 扫一次。必须 > parliament_total_timeout，否则议会跑一半被 reclaim。
+    parliament_stale_seconds: int = 800
 
     # 每议会公平分槽：单议会内同时飞的最大 LLM 请求数。
     # 配合全局 LLM_MAX_CONCURRENCY 实现"跨议会公平 + 议会内公平"。
