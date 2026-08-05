@@ -420,14 +420,53 @@ export default function ParliamentPage() {
           setErrorMsg(event.error || "未知错误");
         }
       },
-      (err) => {
+      // Codex 建议 / PRD fix: SSE 断开不等于会议崩了!
+      // Worker 进程独立跑议会的(不依赖 SSE 存活), 所以 SSE 连接失败时
+      // 不能 setStatus("error") 把议会判死刑 — 改为显示"重连中"温和提示.
+      // 用户看到的是"网络不稳定,正在重连"而不是"会议已停止".
+      () => {
+        // sse.ts 内部已无限重连,只有 MAX_RECONNECT(60次) 才回调这里
+        // 到这里说明确实长时间连不上(30分钟),才真的降级为 error
         setStatus("error");
-        setErrorMsg(err.message);
+        setErrorMsg("网络持续不稳定，会议可能仍在后台运行。请刷新页面查看最新状态。");
       }
     );
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parliamentId]);
+
+  // ============================
+  // Codex 建议 / PRD fix: SSE 可以断,会议不能跟着断
+  // HTTP 轮询 fallback — 在非 done/error 状态下每 20s polling 一次
+  // 这样即使 SSE 完全挂了,用户刷新页面或等一会儿也能看到最新状态
+  // Worker 进程跑议会完全独立于 SSE, events 表在持续写入
+  // ============================
+  useEffect(() => {
+    if (!parliamentId || status === "done" || status === "error") return;
+    let active = true;
+    const interval = setInterval(async () => {
+      if (!active || status === "done" || status === "error") return;
+      try {
+        const { getParliament } = await import("@/lib/api");
+        const snapshot = await getParliament(parliamentId);
+        if (!active) return;
+        if (snapshot.status === "done") {
+          setStatus("done");
+        } else if (snapshot.status === "failed" || snapshot.status === "cancelled") {
+          setStatus("error");
+        } else if (snapshot.status === "awaiting_input") {
+          setStatus("awaiting_input");
+        }
+      } catch {
+        // 静默失败,不打断用户
+      }
+    }, 20000); // 20s polling
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parliamentId, status]);
 
   const handleUserSubmit = async (text: string) => {
     // V1-S3: 用户插话真入后端 runtime_context，下一轮 debate 节点会读出来
