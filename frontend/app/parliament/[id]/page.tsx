@@ -492,6 +492,24 @@ export default function ParliamentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parliamentId, status]);
 
+  // ============================
+  // 离开页面自动取消会议(用户需求)
+  // 组件卸载(返回上一页/关页面/路由跳转)时主动调 cancel API
+  // 只有议会还在(non-terminal)状态时才取消
+  // 用 fetch keepalive 确保即使页面正在关闭请求也能发出
+  // ============================
+  useEffect(() => {
+    return () => {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "";
+      fetch(`${apiBase}/api/parliament/${parliamentId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        keepalive: true,
+      }).catch(() => {});
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parliamentId]);
+
   const handleUserSubmit = async (text: string) => {
     // V1-S3: 用户插话真入后端 runtime_context，下一轮 debate 节点会读出来
     // 同时乐观更新本地展示，让用户立刻看到气泡
