@@ -40,7 +40,7 @@ async def preview_decision_path(req: DecisionPathPreviewRequest, request: Reques
         raise HTTPException(status_code=500, detail=f"决策路径生成失败: {exc}") from exc
 
 
-@router.get("/{generation_id}")
+@router.post("/{generation_id}")
 async def get_decision_path(generation_id: str, request: Request) -> dict:
     """从服务端恢复权威草稿(刷新页面后用)。"""
     device_id = _device_id_or_403(request)

@@ -77,11 +77,8 @@ const API_BASE =
  * 订阅议会 SSE 流。
  * 返回 unsubscribe 函数。
  *
- * Codex P0 fix 版本:
- * - EventSource 标准 API 不支持自定义 header → device_id 通过 query 传
- * - Cloudflare 100s 会主动断 → 无限静默重连(reconnectCount 上限 200)
- * - 重连成功→重置 reconnectCount=0(P0-6)
- * - last_seq 用 URLSearchParams 拼接, 无 device_id 时也正确(P0-7)
+ * Codex P0 fix: 全部改为 POST, 避免 EdgeOne webblock 对 GET 的拦截。
+ * 不再用 EventSource(只支持 GET), 改用 fetch POST + ReadableStream 手动解析 SSE 格式。
  */
 export function subscribeParliament(
   parliamentId: string,
@@ -95,78 +92,120 @@ export function subscribeParliament(
         ? localStorage.getItem("xiegang_device_id") || ""
         : "";
   } catch {
-    // localStorage 不可用(Safari 隐私检 / SSR), 走空让后端 fallback IP
+    // localStorage 不可用
   }
 
-  let eventSource: EventSource | null = null;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   let terminalReceived = false;
   let maxSeq = 0;
-  let consecutiveFailures = 0; // P0-6: 重连成功后重置
-  const MAX_CONSECUTIVE_FAILURES = 200; // 足够覆盖 1 小时
+  let consecutiveFailures = 0;
+  const MAX_CONSECUTIVE_FAILURES = 200;
+  let abortController: AbortController | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-  function buildUrl(): string {
-    // P0-7: 用 URLSearchParams 正确拼接, 无论有没有 device_id 都对
+  async function connect() {
+    if (stopped || terminalReceived) return;
+    abortController = new AbortController();
     const params = new URLSearchParams();
     if (deviceId) params.set("device_id", deviceId);
     params.set("last_seq", String(maxSeq));
-    const qs = params.toString();
-    return `${API_BASE}/api/parliament/${parliamentId}/stream?${qs}`;
+
+    try {
+      const resp = await fetch(
+        `${API_BASE}/api/parliament/${parliamentId}/stream?${params}`,
+        {
+          method: "POST",
+          headers: { Accept: "text/event-stream" },
+          signal: abortController.signal,
+        }
+      );
+
+      if (!resp.ok || !resp.body) {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+
+      // 重连成功 → 重置计数
+      consecutiveFailures = 0;
+
+      // 手动解析 SSE 格式(替代 EventSource)
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (!stopped && !terminalReceived) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE 事件以 \n\n 分隔
+        const blocks = buffer.split("\n\n");
+        buffer = blocks.pop() || "";
+
+        for (const block of blocks) {
+          if (!block.trim()) continue;
+          // 跳过 ping event
+          if (block.startsWith("event: ping")) continue;
+
+          // 提取 data: 行
+          const dataLines = block
+            .split("\n")
+            .filter((l) => l.startsWith("data:"))
+            .map((l) => l.slice(5).trim());
+          if (!dataLines.length) continue;
+          const dataStr = dataLines.join("");
+
+          try {
+            const event: ParliamentStreamEvent = JSON.parse(dataStr);
+            if (typeof event.seq === "number" && event.seq > maxSeq) {
+              maxSeq = event.seq;
+            }
+            onEvent(event);
+            if (
+              event.type === "parliament_done" ||
+              event.type === "cancelled" ||
+              event.type === "error"
+            ) {
+              terminalReceived = true;
+              reader.cancel();
+              return;
+            }
+          } catch {
+            // JSON parse 失败, 跳过
+          }
+        }
+      }
+
+      // 流正常结束(非 terminal) → 重连
+      if (!stopped && !terminalReceived) {
+        triggerReconnect();
+      }
+    } catch (err) {
+      if (stopped || terminalReceived) return;
+      // AbortError 不算失败
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      triggerReconnect();
+    }
   }
 
-  const connect = () => {
+  function triggerReconnect() {
     if (stopped || terminalReceived) return;
-    const source = new EventSource(buildUrl());
-    eventSource = source;
+    consecutiveFailures += 1;
+    if (consecutiveFailures > MAX_CONSECUTIVE_FAILURES) {
+      stopped = true;
+      onError?.(new Error("连接持续不稳定，会议可能仍在后台运行。请刷新页面。"));
+      return;
+    }
+    const delay = Math.min(3000, 800 * 1.3 ** Math.min(consecutiveFailures, 8));
+    reconnectTimer = setTimeout(connect, delay);
+  }
 
-    source.onopen = () => {
-      // P0-6: 重连成功 → 重置连续失败计数
-      consecutiveFailures = 0;
-    };
-
-    source.onmessage = (e) => {
-      try {
-        const event: ParliamentStreamEvent = JSON.parse(e.data);
-        // 记住 max seq 供下次重连断点续传
-        if (typeof event.seq === "number" && event.seq > maxSeq) {
-          maxSeq = event.seq;
-        }
-        onEvent(event);
-        if (
-          event.type === "parliament_done" ||
-          event.type === "cancelled" ||
-          event.type === "error"
-        ) {
-          terminalReceived = true;
-          source.close();
-        }
-      } catch {
-        // JSON parse 失败, 不打断议会
-      }
-    };
-
-    source.onerror = () => {
-      source.close();
-      if (stopped || terminalReceived) return;
-      // Cloudflare 断开 = 正常;收到任何有效事件就重置 consecutiveFailures
-      consecutiveFailures += 1;
-      if (consecutiveFailures > MAX_CONSECUTIVE_FAILURES) {
-        stopped = true;
-        onError?.(new Error("连接持续不稳定，会议可能仍在后台运行。请刷新页面。"));
-        return;
-      }
-      // 1-3s 指数退避
-      const delay = Math.min(3000, 800 * 1.3 ** Math.min(consecutiveFailures, 8));
-      reconnectTimer = setTimeout(connect, delay);
-    };
-  };
-
+  // 启动连接
   connect();
 
   return () => {
     stopped = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
-    eventSource?.close();
+    abortController?.abort();
   };
 }

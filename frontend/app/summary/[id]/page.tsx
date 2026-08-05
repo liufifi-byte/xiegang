@@ -40,7 +40,8 @@ export default function SummaryPage() {
       // 本地开发走同源 ''(空字符串) → 由 next.config.js 的 rewrites 反代
       const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "";
       const res = await fetch(
-        `${apiBase}/api/parliament/${parliamentId}?include_agent_traces=false`
+        `${apiBase}/api/parliament/${parliamentId}?include_agent_traces=false`,
+        { method: "POST" }
       );
       if (res.status === 404) {
         setError("议会不存在或已过期");

@@ -152,13 +152,19 @@ export async function cancelParliament(
   return res.json();
 }
 export async function getParliament(parliamentId: string) {
-  const res = await fetch(`${API_BASE}/api/parliament/${parliamentId}`);
+  const res = await fetch(`${API_BASE}/api/parliament/${parliamentId}`, {
+    method: "POST",
+    headers: buildHeaders(),
+  });
   if (!res.ok) throw new Error(`getParliament ${res.status}`);
   return res.json();
 }
 
 export async function listParliaments() {
-  const res = await fetch(`${API_BASE}/api/parliament/`);
+  const res = await fetch(`${API_BASE}/api/parliament/`, {
+    method: "POST",
+    headers: buildHeaders(),
+  });
   if (!res.ok) throw new Error(`listParliaments ${res.status}`);
   return res.json();
 }
@@ -189,6 +195,7 @@ export interface CurrentParliament {
 
 export async function getCurrentParliament(): Promise<CurrentParliament | null> {
   const res = await fetch(`${API_BASE}/api/parliament/active/current`, {
+    method: "POST",
     headers: buildHeaders(),
     cache: "no-store",
   });

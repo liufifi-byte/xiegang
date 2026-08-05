@@ -40,10 +40,11 @@ async def _load_parliament_from_db(parliament_id: str) -> dict | None:
     return result.data if result.data else None
 
 
-@router.get("/{parliament_id}/stream")
+@router.post("/{parliament_id}/stream")
 async def stream_parliament(parliament_id: str, request: Request):
     """订阅议会进度：500ms 轮询 events 表。
 
+    Codex fix: 改为 POST 避免 EdgeOne webblock 对 GET 方法的拦截。
     P0-S2.3: 这个 endpoint 不再跑 LangGraph。
     真正的执行在 worker.py。
     """

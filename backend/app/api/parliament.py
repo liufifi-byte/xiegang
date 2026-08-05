@@ -492,7 +492,7 @@ async def heartbeat_parliament(
     return {"ok": True, "server_time": now.isoformat()}
 
 
-@router.get("/active/current")
+@router.post("/active/current")
 async def get_current_parliament(request: Request) -> dict:
     """Return the latest recoverable council for this anonymous device."""
     device_id = _get_device_id(request)
@@ -514,7 +514,7 @@ async def get_current_parliament(request: Request) -> dict:
     return {"item": result.data[0] if result.data else None}
 
 
-@router.get("/{parliament_id}")
+@router.post("/{parliament_id}")
 async def get_parliament(
     parliament_id: str,
     include_agent_traces: bool = True,
@@ -581,7 +581,7 @@ async def get_parliament(
     )
 
 
-@router.get("/")
+@router.post("/")
 async def list_parliaments(limit: int = 20) -> dict:
     """列出最近的议会（前端列表用）。"""
     supabase = get_supabase()

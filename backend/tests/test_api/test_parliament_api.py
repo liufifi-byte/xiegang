@@ -106,7 +106,7 @@ def test_parliament_get_returns_404_for_missing(client, monkeypatch):
 
     monkeypatch.setattr(parl_api, "get_supabase", lambda: MockSupabase())
 
-    response = client.get("/api/parliament/non-existent-id")
+    response = client.post("/api/parliament/non-existent-id")
     assert response.status_code == 404
 
 
@@ -134,7 +134,7 @@ def test_list_parliaments_returns_items(client, monkeypatch):
 
     monkeypatch.setattr(parl_api, "get_supabase", lambda: MockSupabase())
 
-    response = client.get("/api/parliament/")
+    response = client.post("/api/parliament/")
     assert response.status_code == 200
     data = response.json()
     assert len(data["items"]) == 2
@@ -177,7 +177,7 @@ def test_parliament_get_returns_archived_agent_research(client, monkeypatch):
             return Chain()
 
     monkeypatch.setattr(parl_api, "get_supabase", lambda: MockSupabase())
-    response = client.get("/api/parliament/p1")
+    response = client.post("/api/parliament/p1")
     assert response.status_code == 200
     data = response.json()
     assert data["selected_expert_ids"] == ["economist"]
@@ -222,7 +222,7 @@ def test_summary_query_can_exclude_agent_work_path(client, monkeypatch):
             return Chain()
 
     monkeypatch.setattr(parl_api, "get_supabase", lambda: MockSupabase())
-    response = client.get(
+    response = client.post(
         "/api/parliament/p-summary?include_agent_traces=false"
     )
     assert response.status_code == 200
