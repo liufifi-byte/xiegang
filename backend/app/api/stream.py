@@ -113,9 +113,14 @@ async def stream_parliament(parliament_id: str, request: Request):
         }
 
         # 3. 轮询 events
-        last_seq = 0
+        # PRD fix: 允许客户端在 ?last_seq=N 时从断点续传(Cloudflare 100s 断开的常见场景)
+        try:
+            last_seq = int(request.query_params.get("last_seq", "0"))
+        except (ValueError, TypeError):
+            last_seq = 0
         start_time = time.monotonic()
         terminal_types = {"parliament_done", "cancelled", "error"}
+        last_heartbeat = time.monotonic()
 
         while True:
             # 客户端断开
@@ -164,8 +169,12 @@ async def stream_parliament(parliament_id: str, request: Request):
                 if event_type in terminal_types:
                     return
 
-            # 心跳 ping（每 15s 一次）
-            if int(time.time()) % 15 == 0:
+            # PRD fix: 心跳用计时器, 不靠 time.time() % 15 (容易恰好跳过)
+            # Cloudflare 免费层 ~100s 无任何字节就断开, 这里每 30s 发一次 SSE comment
+            # ("ping" event 是标准 SSE 心跳, 浏览器 onmessage 不触发它)
+            now = time.monotonic()
+            if now - last_heartbeat > 30:
+                last_heartbeat = now
                 yield {"event": "ping", "data": ""}
 
             await asyncio.sleep(POLL_INTERVAL_SECONDS)

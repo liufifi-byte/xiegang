@@ -96,25 +96,39 @@ export function subscribeParliament(
     // localStorage 不可用(Safari 隐私检 / SSR), 走空让后端 fallback IP
   }
   const qs = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : "";
-  const url = `${API_BASE}/api/parliament/${parliamentId}/stream${qs}`;
+  let url = `${API_BASE}/api/parliament/${parliamentId}/stream${qs}`;
   let eventSource: EventSource | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   let terminalReceived = false;
-  let failedAttempts = 0;
+  let maxSeq = 0; // PRD fix: 记住最后收到的 seq, 重连时从断点续传
+  // PRD fix: Cloudflare 100s 会主动断 SSE → 这是常态,不是错误!
+  //          前端必须无限重连(只要没收到 terminal 事件就继续),
+  //          12 分钟议会期间可能 20+ 次断开重连, 全程对用户透明.
+  let reconnectCount = 0;
+  const MAX_RECONNECT = 60; // 12 分钟议会 × 每 30s 心跳间隔 ≈ 24 次, 给 60 余量
 
   const connect = () => {
     if (stopped || terminalReceived) return;
-    const source = new EventSource(url);
+    // 重连时把 maxSeq 传给后端 → 后端从 last_seq 续传(CF 100s 断开后的断点恢复)
+    const currentUrl =
+      reconnectCount === 0
+        ? url
+        : `${url}&last_seq=${maxSeq}`;
+    const source = new EventSource(currentUrl);
     eventSource = source;
 
     source.onopen = () => {
-      failedAttempts = 0;
+      // 重连成功, 不算失败
     };
 
     source.onmessage = (e) => {
       try {
         const event: ParliamentStreamEvent = JSON.parse(e.data);
+        // 记住 max seq 供下次重连使用
+        if (typeof event.seq === "number" && event.seq > maxSeq) {
+          maxSeq = event.seq;
+        }
         onEvent(event);
         if (
           event.type === "parliament_done" ||
@@ -125,20 +139,22 @@ export function subscribeParliament(
           source.close();
         }
       } catch (err) {
-        onError?.(err as Error);
+        // JSON parse 失败, 不打断议会
       }
     };
 
     source.onerror = () => {
       source.close();
       if (stopped || terminalReceived) return;
-      failedAttempts += 1;
-      if (failedAttempts >= 5) {
+      // PRD fix: Cloudflare 断开 = 正常, 不再用 failedAttempts 计数
+      // 只要议会状态不是 terminal 就无限重连, 间隔 1-3s 指数退避
+      reconnectCount += 1;
+      if (reconnectCount > MAX_RECONNECT) {
         stopped = true;
-        onError?.(new Error("SSE 连接出错"));
+        onError?.(new Error("连接持续不稳定，已停止自动重连"));
         return;
       }
-      const delay = Math.min(5000, 750 * 2 ** (failedAttempts - 1));
+      const delay = Math.min(3000, 1000 * 1.5 ** Math.min(reconnectCount - 1, 5));
       reconnectTimer = setTimeout(connect, delay);
     };
   };
