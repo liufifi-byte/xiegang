@@ -308,6 +308,32 @@ async def _cancel_abandoned_councils() -> int:
     return len(ids)
 
 
+async def _cleanup_stale_awaiting_input() -> int:
+    """清理超过 30 分钟的 awaiting_input 议会。
+
+    这些议会是"卡在问你问题但你没回答"的状态。
+    30 分钟没动作 → 当作放弃 → 标 cancelled，释放 device 并发占位。
+    用 settings.parliament_stale_seconds * 15（默认 120*15=1800s=30min）。
+    """
+    def find() -> list[str]:
+        with psycopg.connect(_clean_db_url(), connect_timeout=30) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id FROM parliaments
+                    WHERE status = 'awaiting_input'
+                      AND created_at < now() - interval '30 minutes'
+                    """
+                )
+                return [str(row[0]) for row in cur.fetchall()]
+
+    ids = await asyncio.to_thread(find)
+    for pid in ids:
+        await _mark_terminal_status(pid, "cancelled", "awaiting_input_timeout")
+        _append_event_safe(pid, "cancelled", {"reason": "awaiting_input_timeout_30min"})
+    return len(ids)
+
+
 async def fetch_next_queued_parliament() -> dict | None:
     """SELECT FOR UPDATE SKIP LOCKED 抢一个 queued 任务。
 
@@ -668,6 +694,7 @@ async def worker_loop() -> None:
     logger.info("Worker 启动，并发上限 %d", _MAX_CONCURRENT)
     last_lease_sweep = 0.0
     last_orphan_sweep = 0.0
+    last_awaiting_cleanup = 0.0
     orphan_sweep_interval = 30.0  # L3 主 loop 内每 30s 主动 reclaim orphan 议会
 
     try:
@@ -682,6 +709,16 @@ async def worker_loop() -> None:
                     if cancelled:
                         logger.info("已取消 %d 场离站会议", cancelled)
                     last_lease_sweep = time.monotonic()
+
+                # 每 5 分钟清理 30 分钟以上的 awaiting_input 残留
+                if time.monotonic() - last_awaiting_cleanup >= 300:
+                    try:
+                        cleaned = await _cleanup_stale_awaiting_input()
+                        if cleaned:
+                            logger.info("清理 %d 场超时 awaiting_input 议会", cleaned)
+                    except Exception as exc:
+                        logger.warning("awaiting_input 清理失败: %s", exc)
+                    last_awaiting_cleanup = time.monotonic()
 
                 # L3 主 loop 内定时 reclaim orphan 议会（不只启动时跑）
                 if time.monotonic() - last_orphan_sweep >= orphan_sweep_interval:
