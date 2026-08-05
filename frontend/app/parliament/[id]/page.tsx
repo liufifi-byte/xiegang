@@ -796,6 +796,28 @@ export default function ParliamentPage() {
             <div className="mx-4 my-6 rounded-xl border border-[#ec403d]/30 bg-[#fff0ed] p-4 text-sm text-[#a43b38]">
               <strong>会议已停止：</strong>
               {errorMsg}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    // 把原议题写回 sessionStorage,跳回 setup 页让用户复盘重开
+                    try {
+                      const { saveCouncilDraft } = await import("@/lib/council-draft");
+                      saveCouncilDraft({
+                        topic,
+                        topicCategory: null,
+                        userBackground: "",
+                      });
+                    } catch {
+                      // sessionStorage 不可用,直接跳也行
+                    }
+                    router.push("/council/setup");
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-br from-[#30103f] to-[#4b1c62] px-4 py-2 text-xs font-bold text-white shadow-md transition hover:-translate-y-0.5"
+                >
+                  ↻ 再次召集会议
+                </button>
+              </div>
             </div>
           )}
         </div>
