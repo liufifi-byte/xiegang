@@ -77,15 +77,17 @@ const API_BASE =
  * 订阅议会 SSE 流。
  * 返回 unsubscribe 函数。
  *
- * EventSource 标准 API 不支持自定义 header,所以 device_id 通过 query 传
- * (后端 stream.py 优先从 query_params 读)。
+ * Codex P0 fix 版本:
+ * - EventSource 标准 API 不支持自定义 header → device_id 通过 query 传
+ * - Cloudflare 100s 会主动断 → 无限静默重连(reconnectCount 上限 200)
+ * - 重连成功→重置 reconnectCount=0(P0-6)
+ * - last_seq 用 URLSearchParams 拼接, 无 device_id 时也正确(P0-7)
  */
 export function subscribeParliament(
   parliamentId: string,
   onEvent: (event: ParliamentStreamEvent) => void,
   onError?: (error: Error) => void
 ): () => void {
-  // 拿 device_id (localStorage 里的稳定 UUID, 或 fallback 用 ip:xxx)
   let deviceId = "";
   try {
     deviceId =
@@ -95,37 +97,38 @@ export function subscribeParliament(
   } catch {
     // localStorage 不可用(Safari 隐私检 / SSR), 走空让后端 fallback IP
   }
-  const qs = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : "";
-  let url = `${API_BASE}/api/parliament/${parliamentId}/stream${qs}`;
+
   let eventSource: EventSource | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   let terminalReceived = false;
-  let maxSeq = 0; // PRD fix: 记住最后收到的 seq, 重连时从断点续传
-  // PRD fix: Cloudflare 100s 会主动断 SSE → 这是常态,不是错误!
-  //          前端必须无限重连(只要没收到 terminal 事件就继续),
-  //          12 分钟议会期间可能 20+ 次断开重连, 全程对用户透明.
-  let reconnectCount = 0;
-  const MAX_RECONNECT = 60; // 12 分钟议会 × 每 30s 心跳间隔 ≈ 24 次, 给 60 余量
+  let maxSeq = 0;
+  let consecutiveFailures = 0; // P0-6: 重连成功后重置
+  const MAX_CONSECUTIVE_FAILURES = 200; // 足够覆盖 1 小时
+
+  function buildUrl(): string {
+    // P0-7: 用 URLSearchParams 正确拼接, 无论有没有 device_id 都对
+    const params = new URLSearchParams();
+    if (deviceId) params.set("device_id", deviceId);
+    params.set("last_seq", String(maxSeq));
+    const qs = params.toString();
+    return `${API_BASE}/api/parliament/${parliamentId}/stream?${qs}`;
+  }
 
   const connect = () => {
     if (stopped || terminalReceived) return;
-    // 重连时把 maxSeq 传给后端 → 后端从 last_seq 续传(CF 100s 断开后的断点恢复)
-    const currentUrl =
-      reconnectCount === 0
-        ? url
-        : `${url}&last_seq=${maxSeq}`;
-    const source = new EventSource(currentUrl);
+    const source = new EventSource(buildUrl());
     eventSource = source;
 
     source.onopen = () => {
-      // 重连成功, 不算失败
+      // P0-6: 重连成功 → 重置连续失败计数
+      consecutiveFailures = 0;
     };
 
     source.onmessage = (e) => {
       try {
         const event: ParliamentStreamEvent = JSON.parse(e.data);
-        // 记住 max seq 供下次重连使用
+        // 记住 max seq 供下次重连断点续传
         if (typeof event.seq === "number" && event.seq > maxSeq) {
           maxSeq = event.seq;
         }
@@ -138,7 +141,7 @@ export function subscribeParliament(
           terminalReceived = true;
           source.close();
         }
-      } catch (err) {
+      } catch {
         // JSON parse 失败, 不打断议会
       }
     };
@@ -146,15 +149,15 @@ export function subscribeParliament(
     source.onerror = () => {
       source.close();
       if (stopped || terminalReceived) return;
-      // PRD fix: Cloudflare 断开 = 正常, 不再用 failedAttempts 计数
-      // 只要议会状态不是 terminal 就无限重连, 间隔 1-3s 指数退避
-      reconnectCount += 1;
-      if (reconnectCount > MAX_RECONNECT) {
+      // Cloudflare 断开 = 正常;收到任何有效事件就重置 consecutiveFailures
+      consecutiveFailures += 1;
+      if (consecutiveFailures > MAX_CONSECUTIVE_FAILURES) {
         stopped = true;
-        onError?.(new Error("连接持续不稳定，已停止自动重连"));
+        onError?.(new Error("连接持续不稳定，会议可能仍在后台运行。请刷新页面。"));
         return;
       }
-      const delay = Math.min(3000, 1000 * 1.5 ** Math.min(reconnectCount - 1, 5));
+      // 1-3s 指数退避
+      const delay = Math.min(3000, 800 * 1.3 ** Math.min(consecutiveFailures, 8));
       reconnectTimer = setTimeout(connect, delay);
     };
   };

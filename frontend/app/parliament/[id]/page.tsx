@@ -437,25 +437,49 @@ export default function ParliamentPage() {
 
   // ============================
   // Codex 建议 / PRD fix: SSE 可以断,会议不能跟着断
-  // HTTP 轮询 fallback — 在非 done/error 状态下每 20s polling 一次
+  // HTTP 轮询 fallback — 在非 done/error 状态下每 15s polling 一次
   // 这样即使 SSE 完全挂了,用户刷新页面或等一会儿也能看到最新状态
   // Worker 进程跑议会完全独立于 SSE, events 表在持续写入
+  //
+  // Codex P0-4: polling 必须完整恢复 transcript / members / traces / round / summary
   // ============================
+  const statusRef = useRef(status);
+  statusRef.current = status;
   useEffect(() => {
-    if (!parliamentId || status === "done" || status === "error") return;
+    if (!parliamentId) return;
     let active = true;
     const interval = setInterval(async () => {
-      if (!active || status === "done" || status === "error") return;
+      const cur = statusRef.current;
+      if (!active || cur === "done" || cur === "error") return;
       try {
         const { getParliament } = await import("@/lib/api");
         const snapshot = await getParliament(parliamentId);
         if (!active) return;
         if (snapshot.status === "done") {
           setStatus("done");
-        } else if (snapshot.status === "failed" || snapshot.status === "cancelled") {
+          if (snapshot.summary) setSummary(snapshot.summary);
+          if (snapshot.transcript) setTranscript(snapshot.transcript);
+          if (snapshot.round) setCurrentRound(snapshot.round);
+          return;
+        }
+        if (snapshot.status === "failed" || snapshot.status === "cancelled") {
           setStatus("error");
-        } else if (snapshot.status === "awaiting_input") {
+          setErrorMsg(snapshot.status === "cancelled" ? "议会已被取消" : "议会运行失败");
+          return;
+        }
+        if (snapshot.status === "awaiting_input") {
           setStatus("awaiting_input");
+          setServerPhase("awaiting_input");
+        }
+        if (snapshot.members_state) {
+          setMemberStatus(
+            Object.fromEntries(
+              Object.entries(snapshot.members_state).map(([k, v]) => [
+                k as MemberId,
+                ((v as { degraded?: boolean })?.degraded ? "degraded" : "done") as MemberStatus,
+              ])
+            ) as Partial<Record<MemberId, MemberStatus>>
+          );
         }
       } catch {
         // 静默失败,不打断用户

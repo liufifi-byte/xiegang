@@ -273,9 +273,9 @@ async def _set_phase(parliament_id: str, phase: str) -> None:
 async def _cancel_abandoned_councils() -> int:
     """Cancel councils whose browser lease expired.
 
-    P0 fix: 关闭页面 → SSE 断开 → 15s 内无新 heartbeat → 立即取消。
-    比之前 60s 更激进——用户关闭页面就停（省 token）。
-    SSE 短暂断开（刷新/网络抖动）有 15s 恢复窗口。
+    Codex P0-8: 关闭页面 → SSE 断开 → 90s 内无新 heartbeat → 才取消。
+    之前 15s 太激进，手机后台 / 短暂网络切换直接误杀会议。
+    90s = Cloudflare 100s 超时 + 余量，跟 SSE 心跳节奏对齐不会误杀。
     """
     def find() -> list[str]:
         with psycopg.connect(_clean_db_url(), connect_timeout=30) as conn:
@@ -286,7 +286,7 @@ async def _cancel_abandoned_councils() -> int:
                     FROM parliaments
                     WHERE status IN ('queued', 'running')
                       AND last_client_heartbeat IS NOT NULL
-                      AND last_client_heartbeat < now() - interval '15 seconds'
+                      AND last_client_heartbeat < now() - interval '90 seconds'
                       AND (
                         keep_alive_until IS NULL
                         OR keep_alive_until < now()

@@ -127,15 +127,9 @@ async def stream_parliament(parliament_id: str, request: Request):
             if await request.is_disconnected():
                 return
 
-            # 超时
+            # 超时(Codex P0-5): 不再发 type:error 让前端判死刑
+            # 改为静默 return — 前端 sse.ts 会静默重连(HTTP polling fallback 兜底)
             if time.monotonic() - start_time > MAX_WATCH_SECONDS:
-                yield {
-                    "event": "message",
-                    "data": json.dumps(
-                        {"type": "error", "error": "观看超时"},
-                        ensure_ascii=False,
-                    ),
-                }
                 return
 
             # 抓新事件
