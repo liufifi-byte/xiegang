@@ -127,10 +127,31 @@ export function subscribeParliament(
       // 重连成功 → 重置计数
       consecutiveFailures = 0;
 
-      // 手动解析 SSE 格式(替代 EventSource)
+      // 手动解析 SSE 格式(line-by-line 状态机, 比按 \n\n 切分更鲁棒)
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let pendingData = "";
+
+      const emitEvent = (dataStr: string) => {
+        try {
+          const event: ParliamentStreamEvent = JSON.parse(dataStr);
+          if (typeof event.seq === "number" && event.seq > maxSeq) {
+            maxSeq = event.seq;
+          }
+          onEvent(event);
+          if (
+            event.type === "parliament_done" ||
+            event.type === "cancelled" ||
+            event.type === "error"
+          ) {
+            terminalReceived = true;
+            reader.cancel();
+          }
+        } catch {
+          // JSON parse 失败, 跳过
+        }
+      };
 
       while (!stopped && !terminalReceived) {
         const { done, value } = await reader.read();
@@ -138,42 +159,39 @@ export function subscribeParliament(
 
         buffer += decoder.decode(value, { stream: true });
 
-        // SSE 事件以 \n\n 分隔
-        const blocks = buffer.split("\n\n");
-        buffer = blocks.pop() || "";
+        // 按 line 处理. SSE 事件 = 连续 "data:" 行, 空行(\n) 触发 emit.
+        // "event:" 行(如 ping) 被忽略不是问题(我们只看 data).
+        let idx: number;
+        while ((idx = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, idx).replace(/\r$/, "");
+          buffer = buffer.slice(idx + 1);
 
-        for (const block of blocks) {
-          if (!block.trim()) continue;
-          // 跳过 ping event
-          if (block.startsWith("event: ping")) continue;
-
-          // 提取 data: 行
-          const dataLines = block
-            .split("\n")
-            .filter((l) => l.startsWith("data:"))
-            .map((l) => l.slice(5).trim());
-          if (!dataLines.length) continue;
-          const dataStr = dataLines.join("");
-
-          try {
-            const event: ParliamentStreamEvent = JSON.parse(dataStr);
-            if (typeof event.seq === "number" && event.seq > maxSeq) {
-              maxSeq = event.seq;
+          if (line === "") {
+            // 空行 = 事件分隔符 → emit buffered data
+            if (pendingData) {
+              emitEvent(pendingData);
+              pendingData = "";
+              if (terminalReceived) break;
             }
-            onEvent(event);
-            if (
-              event.type === "parliament_done" ||
-              event.type === "cancelled" ||
-              event.type === "error"
-            ) {
-              terminalReceived = true;
-              reader.cancel();
-              return;
+            continue;
+          }
+
+          if (line.startsWith("data:")) {
+            const payload = line.slice(5).trim();
+            pendingData = pendingData
+              ? pendingData + payload
+              : payload;
+          }
+          // "event:" / "id:" / "retry:" 行忽略(不需要)
+          if (line.startsWith("event:")) {
+            const evtName = line.slice(6).trim();
+            if (evtName === "ping") {
+              // ping 不带 data, 单行就是一个事件, 清 pending
+              pendingData = "";
             }
-          } catch {
-            // JSON parse 失败, 跳过
           }
         }
+        if (terminalReceived) break;
       }
 
       // 流正常结束(非 terminal) → 重连
