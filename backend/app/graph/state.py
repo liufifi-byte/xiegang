@@ -75,8 +75,14 @@ def make_initial_state(
     clarification_status: str = "not_checked",
     clarification_questions: list[dict[str, Any]] | None = None,
     clarification_answers: list[dict[str, Any]] | None = None,
+    decision_path: dict[str, Any] | None = None,
+    decision_path_status: str = "not_started",
 ) -> ParliamentState:
-    """方便地构造一个干净的初始 state（所有字段都有默认值）。"""
+    """方便地构造一个干净的初始 state（所有字段都有默认值）。
+
+    PRD v1.1 §14.3: 新增 decision_path / decision_path_status 字段。
+    parse_topic 节点会优先读 decision_path_status='confirmed' 跳过 LLM 分类。
+    """
     return {
         "topic": topic,
         "user_id": user_id,
@@ -128,4 +134,7 @@ def make_initial_state(
         "interrupt_pending": False,
         "parliament_id": parliament_id,
         "started_at": None,
+        # PRD v1.1 §14.3
+        "decision_path": dict(decision_path or {}),
+        "decision_path_status": decision_path_status,
     }

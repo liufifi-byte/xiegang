@@ -40,6 +40,14 @@ interface Props {
 
 const MAX_BRIEF_FEEDBACK = 500;
 
+/** PRD v1.1 §6.8: 默认公开承诺; 如果后端带了 agent_research_policy 就用服务端的 */
+function researchPolicyMessage(preview: DecisionPathPreview): string {
+  return (
+    preview.agent_research_policy?.public_message
+    || "公开信息将由专家在会议中自主判断并按需核实，实际搜索与计算会在发生后展示。"
+  );
+}
+
 export function DecisionPathModal({
   open,
   topic,
@@ -245,7 +253,7 @@ export function DecisionPathModal({
           {preview && (status === "ready" || status === "create_failed") && (
             <>
               {/* 任务简报 */}
-              <BriefCard brief={preview.brief} />
+              <BriefCard brief={preview.brief} preview={preview} />
 
               {preview.fallback_used && (
                 <div className="mt-2 rounded-md bg-[#fff8e8] px-3 py-1.5 text-xs text-[#b58900]">
@@ -374,11 +382,13 @@ export function DecisionPathModal({
   );
 }
 
-/** 简报卡片展示(PRD §4.2 / §8.2) */
+/** 简报卡片展示(PRD §4.2 / §8.2 / v1.1 §6.8) */
 function BriefCard({
   brief,
+  preview,
 }: {
   brief: DecisionPathPreview["brief"];
+  preview: DecisionPathPreview;
 }) {
   return (
     <div className="rounded-2xl border border-[#e9ded8] bg-[#fff8f3] p-4 shadow-sm sm:p-5">
@@ -393,11 +403,10 @@ function BriefCard({
       <Section title="重点分析">
         <Pills items={brief.analysis_dimensions} />
       </Section>
-      {brief.autonomous_research?.length > 0 && (
-        <Section title="AI 将自行调研">
-          <Pills items={brief.autonomous_research} tone="green" />
-        </Section>
-      )}
+      {/* PRD v1.1 §6.8 / §13.2: 不再展示具体调研清单, 改为公开承诺"专家自主判断" */}
+      <div className="rounded-lg border border-[#a0c8a0] bg-[#f0f8ee] px-3 py-2 text-xs text-[#3a6b3a]">
+        {researchPolicyMessage(preview)}
+      </div>
       <Section title="最终交付">
         <ul className="grid grid-cols-1 gap-1 sm:grid-cols-2">
           {brief.final_deliverables.map((s) => (

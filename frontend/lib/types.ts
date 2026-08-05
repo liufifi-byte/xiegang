@@ -364,8 +364,14 @@ export interface DecisionBrief {
   decision_goal: string;
   decision_options: string[];
   analysis_dimensions: string[];
-  autonomous_research: string[];
+  // PRD v1.1 §6.8: autonomous_research 删除, 工具调研由 ReAct 运行时决定
   final_deliverables: string[];
+}
+
+/** PRD v1.1 §13.2: 调研策略声明 — 只告诉用户"专家自主判断", 不再列具体清单 */
+export interface AgentResearchPolicy {
+  mode: "runtime_autonomous";
+  public_message: string;
 }
 
 export interface ExtractedFact {
@@ -386,6 +392,7 @@ export interface DecisionPathPreview {
   version: string;
   generation_id: string;
   category: string;
+  agent_research_policy?: AgentResearchPolicy;
   brief: DecisionBrief;
   extracted_facts: ExtractedFact[];
   questions: DecisionQuestion[];

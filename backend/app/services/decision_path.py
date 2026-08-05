@@ -30,6 +30,7 @@ from app.llm_concurrency import get_llm_semaphore
 from app.playbooks import Playbook, QuestionTemplate, select_playbook, UNKNOWN_OPTION
 from app.schemas.decision_path import (
     AnswerItem,
+    AgentResearchPolicy,
     Assumption,
     DecisionBrief,
     DecisionPathDraft,
@@ -302,7 +303,8 @@ async def generate_preview(
         decision_goal=llm_out["decision_goal"],
         decision_options=llm_out["decision_options"],
         analysis_dimensions=llm_out["analysis_dimensions"],
-        autonomous_research=list(playbook.autonomous_research),
+        # PRD v1.1 §6.8: 不要把固定调研清单塞进 brief
+        # autonomous_research 字段已从 schema 删除, expert ReAct 自主决定调研路径
         final_deliverables=llm_out["final_deliverables"],
     )
     selected_question_ids = (
@@ -350,6 +352,7 @@ async def generate_preview(
         version="1.0",
         generation_id=generation_id,
         category=playbook.category,
+        agent_research_policy=AgentResearchPolicy(),  # PRD v1.1 §6.8
         brief=brief,
         extracted_facts=extracted_facts,
         questions=questions,
@@ -373,7 +376,7 @@ def load_preview_by_id(generation_id: str, device_id: str) -> DecisionPathDraft 
                     "decision_goal",
                     "decision_options",
                     "analysis_dimensions",
-                    "autonomous_research",
+                    # PRD v1.1: autonomous_research 字段已删除, 这里不传
                     "final_deliverables",
                 )
             }

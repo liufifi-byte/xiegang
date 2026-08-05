@@ -1,12 +1,12 @@
-"""决策路径 Playbook - PRD v1.0 §10 三大场景固定模板.
+"""决策路径 Playbook - PRD v1.1 §10 三大场景固定模板.
 
 每个 Playbook 提供:
-- decision_goal         默认决策目标
-- decision_options      比较方案
-- autonomous_research   AI 自主调研清单(公开信息,不问用户)
-- candidate_questions   关键问题候选池(只问用户专属信息)
-- final_deliverables    最终交付
-- extracted_fact_hints  从用户原文里尝试识别的事实 key(labels)
+- decision_goal               默认决策目标
+- decision_options            比较方案
+- evaluation_research_hints   仅评测参考用,不作为固定调研清单展示给用户(PRD v1.1 §6.8)
+- candidate_questions         关键问题候选池(只问用户专属信息)
+- final_deliverables          最终交付
+- fact_keys                   从用户原文里尝试识别的事实 key(labels)
 """
 from __future__ import annotations
 
@@ -43,7 +43,9 @@ class Playbook:
     decision_goal: str
     decision_options: tuple[str, ...]
     analysis_dimensions: tuple[str, ...]
-    autonomous_research: tuple[str, ...]
+    # PRD v1.1 §6.8 / §10: 不再作为 fixed autonomous_research 展示给用户
+    # 仅留作 Agent 评测判定用(configuration_reference_research_directions)
+    evaluation_research_hints: tuple[str, ...]
     final_deliverables: tuple[str, ...]
     candidate_questions: tuple[QuestionTemplate, ...]
     fact_keys: tuple[str, ...] = field(default_factory=tuple)
@@ -54,7 +56,6 @@ class Playbook:
             "decision_goal": self.decision_goal,
             "decision_options": list(self.decision_options),
             "analysis_dimensions": list(self.analysis_dimensions),
-            "autonomous_research": list(self.autonomous_research),
             "final_deliverables": list(self.final_deliverables),
         }
 
@@ -69,7 +70,7 @@ REAL_ESTATE_PLAYBOOK = Playbook(
     decision_goal="判断用户在当前生活、财务和家庭条件下是否适合购买目标住房，而不是单纯预测房价涨跌。",
     decision_options=("现在购买", "延后六至十八个月购买", "继续租住并保留资金", "降低总价/更换区域"),
     analysis_dimensions=("现金流压力", "租买成本", "持有期限", "生活稳定性"),
-    autonomous_research=(
+    evaluation_research_hints=(
         "当前房贷利率",
         "当地购房政策和交易税费",
         "目标区域成交价和租金",
@@ -182,7 +183,7 @@ CAREER_PLAYBOOK = Playbook(
     decision_goal="判断新机会是否比继续留任更符合用户的收入、成长、生活和长期职业方向，并明确可谈判条件和退出方案。",
     decision_options=("接受当前机会", "留在原岗位", "谈判后再决定", "延后行动并补足能力或信息"),
     analysis_dimensions=("现金与股权", "成长空间", "工作强度", "机会成本", "可逆性"),
-    autonomous_research=(
+    evaluation_research_hints=(
         "目标行业和岗位趋势",
         "公司公开经营与融资情况",
         "同类岗位薪酬和职责",
@@ -311,7 +312,7 @@ INVESTMENT_PLAYBOOK = Playbook(
     decision_goal="判断该资产是否适合用户当前的资金用途、持有期限和整体资产配置，而不是只预测短期价格。",
     decision_options=("现在一次性配置", "分批配置", "暂不配置", "使用其他资产实现同一目标"),
     analysis_dimensions=("预期收益", "最大回撤", "流动性", "持有期", "集中度"),
-    autonomous_research=(
+    evaluation_research_hints=(
         "最新价格与估值位置",
         "利率、汇率和宏观驱动",
         "历史回撤与波动",
@@ -427,7 +428,7 @@ GENERAL_PLAYBOOK = Playbook(
     decision_goal="帮助用户梳理并对比该问题的不同方向、各自代价与收益,而不是只给出一个答案。",
     decision_options=("立即行动", "延后到条件更清晰", "选择替代方案", "放弃当前选项"),
     analysis_dimensions=("核心目标", "现实约束", "替代方案", "最坏结果", "可逆性"),
-    autonomous_research=(
+    evaluation_research_hints=(
         "公开案例与同类决策的成功/失败经验",
         "可参考的数据区间",
     ),

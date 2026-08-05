@@ -37,11 +37,29 @@ class DecisionQuestion(BaseModel):
 
 
 class DecisionBrief(BaseModel):
+    """任务简报(PRD §4.2 / v1.1 §6.8)。
+
+    注意(PRD v1.1 修订):不再包含 autonomous_research,
+    工具选择与调研项由专家 Agent 在运行时自主决定。
+    """
+
     decision_goal: str
     decision_options: list[str]
     analysis_dimensions: list[str]
-    autonomous_research: list[str]
     final_deliverables: list[str]
+
+
+class AgentResearchPolicy(BaseModel):
+    """调研策略声明(PRD v1.1 §6.8 / §13.2)。
+
+    会前弹窗用,统一只告诉用户"公开信息将由专家在会议中自主判断",
+    不展示具体搜索项、工具顺序或次数。
+    """
+
+    mode: Literal["runtime_autonomous"] = "runtime_autonomous"
+    public_message: str = (
+        "公开信息将由专家在会议中自主判断并按需核实，实际搜索与计算会在发生后展示。"
+    )
 
 
 class ExtractedFact(BaseModel):
@@ -102,6 +120,7 @@ class DecisionPathPreviewResponse(BaseModel):
     version: str = "1.0"
     generation_id: str
     category: str
+    agent_research_policy: AgentResearchPolicy = Field(default_factory=AgentResearchPolicy)
     brief: DecisionBrief
     extracted_facts: list[ExtractedFact] = Field(default_factory=list)
     questions: list[DecisionQuestion] = Field(default_factory=list, max_length=3)

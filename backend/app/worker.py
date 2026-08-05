@@ -324,6 +324,8 @@ async def fetch_next_queued_parliament() -> dict | None:
                     SELECT id, topic, topic_category, user_background, user_id, device_id,
                            selected_expert_ids, clarification_status,
                            clarification_questions, clarification_answers,
+                           decision_path, decision_path_status,
+                           idempotency_key,
                            transcript
                     FROM parliaments
                     WHERE status = 'queued'
@@ -346,6 +348,9 @@ async def fetch_next_queued_parliament() -> dict | None:
                     "clarification_status",
                     "clarification_questions",
                     "clarification_answers",
+                    "decision_path",
+                    "decision_path_status",
+                    "idempotency_key",
                     "transcript",
                 ]
                 task = dict(zip(cols, row))
@@ -368,7 +373,11 @@ async def fetch_next_queued_parliament() -> dict | None:
 
 
 def _build_initial_state(task: dict) -> dict:
-    """从 DB 行构造 LangGraph initial state。"""
+    """从 DB 行构造 LangGraph initial state。
+
+    PRD v1.1 §14.3: 把 decision_path / decision_path_status 一并塞进 state,
+    parse_topic 节点会优先读这两字段(不走 LLM 重新分类 / 不预填 research_questions)。
+    """
     return make_initial_state(
         topic=task["topic"],
         user_id=task.get("user_id"),
@@ -379,6 +388,8 @@ def _build_initial_state(task: dict) -> dict:
         clarification_status=task.get("clarification_status") or "not_checked",
         clarification_questions=task.get("clarification_questions") or [],
         clarification_answers=task.get("clarification_answers") or [],
+        decision_path=task.get("decision_path") or {},
+        decision_path_status=task.get("decision_path_status") or "not_started",
     ) | {
         "started_at": time.time(),
         "transcript": list(task.get("transcript") or []),

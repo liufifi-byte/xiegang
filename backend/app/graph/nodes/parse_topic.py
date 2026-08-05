@@ -82,7 +82,17 @@ PARSE_PROMPT = """你是邪杠议会主调度。分析用户提出的决策议�
 
 
 def parse_topic(state: dict) -> dict:
-    """LangGraph 节点函数：分析议题 + 生成简报。"""
+    """LangGraph 节点函数：分析议题 + 生成简报。
+
+    PRD v1.1 §14.3: 如果已确认决策路径(decision_path_status=confirmed),
+    直接读取 brief + extracted_facts + answers,**不再调 LLM 重新分类**,
+    且**不预填 research_questions**——让专家 ReAct 循环在 parallel_research
+    节点自主决定要查什么。
+    """
+    # PRD v1.1 §14.3 快速路径
+    if state.get("decision_path_status") == "confirmed" and state.get("decision_path"):
+        return _parse_topic_from_decision_path(state)
+
     category_hint = state.get("topic_category")
     if category_hint in VALID_CATEGORIES and category_hint != "general":
         return _fallback_briefing(
@@ -161,5 +171,60 @@ def _fallback_briefing(
                 f"核实{variable}的当前情况"
                 for variable in variables[:3]
             ],
+        },
+    }
+
+
+def _parse_topic_from_decision_path(state: dict) -> dict:
+    """PRD v1.1 §14.3: 决策路径已确认时, parse_topic 直接读 brief / facts / answers。
+
+    关键(PRD v1.1 §6.8 / §14.7):
+    - 不预填 research_questions(让专家 ReAct 自主决定要查什么)
+    - 不调 LLM 重新分类
+    - 直接复用 decision_path 里已确认的目标和方案
+    """
+    dp = state.get("decision_path") or {}
+    brief = dp.get("brief") or {}
+    answers = dp.get("answers") or []
+    facts = dp.get("extracted_facts") or []
+    assumptions = dp.get("assumptions") or []
+
+    topic = str(state.get("topic") or "")
+    background = str(state.get("user_background") or "")
+    category = str(dp.get("category") or state.get("topic_category") or "general")
+    if category not in VALID_CATEGORIES:
+        category = "general"
+
+    # xiegang archive.py 也用 decision_model.user_facts, 把"用户回答 + 已识别事实"注入
+    user_facts = [f.get("value") for f in facts if f.get("value")]
+    if background:
+        user_facts.insert(0, background)
+    for ans in answers:
+        if ans.get("answer"):
+            user_facts.append(f"{ans.get('question','?')}: {ans['answer']}")
+
+    # 把"不确定"对应的假设显式标 unknowns
+    unknowns = [a.get("assumption_text", "") for a in assumptions if a.get("assumption_text")]
+    unknowns.extend(CATEGORY_VARIABLES.get(category, [])[:3])
+
+    research_questions: list[str] = []
+    decision_goal = brief.get("decision_goal") or topic
+    options = brief.get("decision_options") or []
+    dimensions = brief.get("analysis_dimensions") or []
+
+    return {
+        "category": category,
+        "briefing": {
+            "key_variables": dimensions or CATEGORY_VARIABLES.get(category, []),
+            "summary": decision_goal,
+        },
+        "decision_model": {
+            "question": topic,
+            "options": options,
+            "user_facts": user_facts,
+            "preferences": [],
+            "unknowns": unknowns,
+            # PRD v1.1 §14.7 故意空: 让专家 ReAct 循环里自己决定调研什么
+            "research_questions": research_questions,
         },
     }
