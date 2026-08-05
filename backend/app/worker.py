@@ -309,11 +309,10 @@ async def _cancel_abandoned_councils() -> int:
 
 
 async def _cleanup_stale_awaiting_input() -> int:
-    """清理超过 30 分钟的 awaiting_input 议会。
+    """清理超过 10 分钟的 awaiting_input 议会。
 
     这些议会是"卡在问你问题但你没回答"的状态。
-    30 分钟没动作 → 当作放弃 → 标 cancelled，释放 device 并发占位。
-    用 settings.parliament_stale_seconds * 15（默认 120*15=1800s=30min）。
+    10 分钟没动作 → 当作放弃 → 标 cancelled，释放 device 并发占位。
     """
     def find() -> list[str]:
         with psycopg.connect(_clean_db_url(), connect_timeout=30) as conn:
@@ -322,7 +321,7 @@ async def _cleanup_stale_awaiting_input() -> int:
                     """
                     SELECT id FROM parliaments
                     WHERE status = 'awaiting_input'
-                      AND created_at < now() - interval '30 minutes'
+                      AND created_at < now() - interval '10 minutes'
                     """
                 )
                 return [str(row[0]) for row in cur.fetchall()]
