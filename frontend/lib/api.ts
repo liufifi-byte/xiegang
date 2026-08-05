@@ -1,10 +1,11 @@
 import { getDeviceId } from "./device";
 import type { ClarificationQuestion } from "./types";
 
-// 生产部署: 浏览器直连后端域名(绕开 Vercel 边缘到国内源站的国际不稳定链路)
-// 本地开发: 走同源 /api(被 next.config.js rewrites 反代到 127.0.0.1:8001)
+// 生产/本地都先指向 origin root（不带 /api 后缀）; 调用方拼接 /api/parliament/*。
+// 浏览器直连后端域名(绕开 Vercel 边缘到国内源站的国际不稳定链路);
+// 本地开发走同源 ''(空字符串) → 由 next.config.js 的 rewrites 反代到 127.0.0.1:8001。
 const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ?? "/api";
+  process.env.NEXT_PUBLIC_API_URL ?? "";
 
 /** P0-S1.1: 构造统一 headers 含 X-Device-Id */
 function buildHeaders(extra: Record<string, string> = {}): Record<string, string> {
@@ -43,7 +44,7 @@ export async function createParliament(
   userId?: string,
   selectedExpertIds?: string[]
 ): Promise<CreateParliamentResponse> {
-  const res = await fetch(`${API_BASE}/parliament`, {
+  const res = await fetch(`${API_BASE}/api/parliament`, {
     method: "POST",
     headers: buildHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
@@ -73,7 +74,7 @@ export async function previewExpertSelection(
   topicCategory?: string,
   userBackground?: string
 ): Promise<ExpertSelectionPreviewResponse> {
-  const res = await fetch(`${API_BASE}/expert-selection/preview`, {
+  const res = await fetch(`${API_BASE}/api/expert-selection/preview`, {
     method: "POST",
     headers: buildHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
@@ -151,13 +152,13 @@ export async function cancelParliament(
   return res.json();
 }
 export async function getParliament(parliamentId: string) {
-  const res = await fetch(`${API_BASE}/parliament/${parliamentId}`);
+  const res = await fetch(`${API_BASE}/api/parliament/${parliamentId}`);
   if (!res.ok) throw new Error(`getParliament ${res.status}`);
   return res.json();
 }
 
 export async function listParliaments() {
-  const res = await fetch(`${API_BASE}/parliament/`);
+  const res = await fetch(`${API_BASE}/api/parliament/`);
   if (!res.ok) throw new Error(`listParliaments ${res.status}`);
   return res.json();
 }
@@ -166,7 +167,7 @@ export async function heartbeatParliament(
   parliamentId: string,
   keepRunning = false
 ): Promise<{ ok: boolean }> {
-  const res = await fetch(`${API_BASE}/parliament/${parliamentId}/heartbeat`, {
+  const res = await fetch(`${API_BASE}/api/parliament/${parliamentId}/heartbeat`, {
     method: "POST",
     headers: buildHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ keep_running: keepRunning }),
@@ -187,7 +188,7 @@ export interface CurrentParliament {
 }
 
 export async function getCurrentParliament(): Promise<CurrentParliament | null> {
-  const res = await fetch(`${API_BASE}/parliament/active/current`, {
+  const res = await fetch(`${API_BASE}/api/parliament/active/current`, {
     headers: buildHeaders(),
     cache: "no-store",
   });
