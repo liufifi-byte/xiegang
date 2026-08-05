@@ -102,15 +102,24 @@ async def _safe_llm_call(
         prompt += f"用户修改意见(必须优先): {feedback}\n"
 
     try:
-        llm = get_structured_llm(LLMDecisionOutput, temperature=0.3, max_tokens=1500)
+        # get_structured_llm 只接收 schema + temperature, 不支持 max_tokens
+        # 真正实施 LLM 总超时(PRD §16.1: 8-12s).超时立刻走 Playbook fallback.
+        import asyncio as _asyncio
+
+        llm = get_structured_llm(LLMDecisionOutput, temperature=0.3)
         sem = get_llm_semaphore()
         async with sem:
             start = time.monotonic()
-            result: LLMDecisionOutput = await llm.ainvoke(prompt)  # type: ignore[assignment]
+            result: LLMDecisionOutput = await _asyncio.wait_for(
+                llm.ainvoke(prompt), timeout=LLM_TIMEOUT_SECONDS
+            )
             elapsed = time.monotonic() - start
             logger.info("decision_path LLM done in %.2fs", elapsed)
             return result.model_dump()
-    except (ValidationError, Exception) as exc:  # noqa: BLE001
+    except TimeoutError:  # asyncio.wait_for raises TimeoutError on timeout
+        logger.warning("decision_path LLM 超时 %.1fs, 走 fallback", LLM_TIMEOUT_SECONDS)
+        return None
+    except Exception as exc:  # noqa: BLE001
         logger.warning("decision_path LLM 失败,走 playbooks 兜底: %s", exc)
         return None
 
@@ -388,13 +397,23 @@ def load_preview_by_id(generation_id: str, device_id: str) -> DecisionPathDraft 
 
 
 def consume_draft(generation_id: str, device_id: str) -> bool:
-    """会议创建成功时把草稿标记为 consumed。返回是否还有效可用。"""
+    """会议创建成功时把草稿标记为 consumed。返回是否还有效可用。
+
+    注意: 不要用 SQL 函数字符串 "now()", 它会被 supabase-py 当成字面值塞进 JSON,
+    导致 PostgreSQL 报 400 invalid input syntax for type timestamp with time zone。
+    用 ISO8601 字符串。
+    """
+    from datetime import datetime, timezone
+
     supabase = get_supabase()
     raw = _load_draft(generation_id, device_id)
     if raw is None:
         return False
     supabase.table("decision_path_drafts").update(
-        {"status": "consumed", "consumed_at": "now()".replace("now()", "")}
+        {
+            "status": "consumed",
+            "consumed_at": datetime.now(timezone.utc).isoformat(),
+        }
     ).eq("id", generation_id).execute()
     return True
 
