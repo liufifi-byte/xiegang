@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ExpertSelectionCard } from "@/components/council/ExpertSelectionCard";
+import { DecisionPathModal } from "@/components/council/DecisionPathModal";
 import {
   createParliament,
   previewExpertSelection,
@@ -30,6 +31,8 @@ export default function CouncilSetupPage() {
   const [creating, setCreating] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // PRD v2: 决策路径弹窗
+  const [decisionPathOpen, setDecisionPathOpen] = useState(false);
 
   useEffect(() => {
     const value = loadCouncilDraft();
@@ -88,25 +91,16 @@ export default function CouncilSetupPage() {
 
   const startCouncil = async () => {
     if (!draft || selected.length < 3 || creating) return;
-    setCreating(true);
-    setError(null);
-    try {
-      const result = await createParliament(
-        draft.topic,
-        draft.topicCategory || undefined,
-        draft.userBackground || undefined,
-        undefined,
-        selected
-      );
-      router.push(`/parliament/${result.parliament_id}`);
-    } catch (caught) {
-      setCreating(false);
-      if (caught instanceof RateLimitError) {
-        setError(caught.message);
-      } else {
-        setError(caught instanceof Error ? caught.message : "创建会议失败，请重试。");
-      }
-    }
+    // PRD v2 §6.7 / §7.1: 点开始讨论先弹决策路径, 用户确认后才创建会议
+    // 旧的同步 createParliament 路径仍保留作为 fallback: 用户在 modal 里取消就回到选项状态
+    setDecisionPathOpen(true);
+  };
+
+  // DecisionPathModal 在用户确认后回调到这里 —— 真正创建议会(走 V2 API 带 decision_path)
+  const handleDecisionPathConfirmed = async (parliamentId: string) => {
+    setDecisionPathOpen(false);
+    setCreating(false);
+    router.push(`/parliament/${parliamentId}`);
   };
 
   if (!draft && !loadingRecommendation) {
@@ -257,6 +251,20 @@ export default function CouncilSetupPage() {
           </div>
         </section>
       </div>
+
+      {/* PRD v2: 决策路径弹窗 */}
+      <DecisionPathModal
+        open={decisionPathOpen}
+        topic={draft?.topic || ""}
+        topicCategory={draft?.topicCategory || null}
+        userBackground={draft?.userBackground || null}
+        selectedExpertIds={selected.length >= 3 ? selected : null}
+        onClose={() => {
+          setDecisionPathOpen(false);
+          setCreating(false);
+        }}
+        onParliamentCreated={handleDecisionPathConfirmed}
+      />
     </main>
   );
 }

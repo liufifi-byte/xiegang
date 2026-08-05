@@ -12,6 +12,7 @@ from app.api.health import router as health_router
 from app.api.expert_selection import router as expert_selection_router
 from app.api.parliament import router as parliament_router
 from app.api.stream import router as stream_router
+from app.api.decision_path import router as decision_path_router
 from app.config import get_settings
 
 settings = get_settings()
@@ -45,6 +46,7 @@ app.include_router(health_router, prefix="/api", tags=["health"])
 app.include_router(expert_selection_router)
 app.include_router(parliament_router, tags=["parliament"])
 app.include_router(stream_router, tags=["stream"])
+app.include_router(decision_path_router, tags=["decision-path"])
 
 
 @app.get("/")
@@ -60,6 +62,8 @@ async def api_root() -> dict:
             "POST /api/parliament            — 创建议会",
             "GET  /api/parliament/{{id}}          — 查议会状态",
             "GET  /api/parliament/{{id}}/stream   — SSE 流",
+            "POST /api/decision-path/preview  — 决策路径预览(PRD v2)",
+            "GET  /api/decision-path/{{id}}       — 决策路径草稿恢复",
         ]
     }
 

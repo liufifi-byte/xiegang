@@ -7,12 +7,25 @@ from pydantic import BaseModel, Field, field_validator
 from app.agents.profiles import EXPERT_PROFILES
 
 
+class AnswerPayload(BaseModel):
+    """决策路径答案项, 复用 schemas.decision_path.AnswerItem 但避免循环引用"""
+
+    question_id: str
+    value: str | list[str]
+    custom_value: str | None = None
+
+
 class CreateParliamentRequest(BaseModel):
     topic: str = Field(min_length=1, max_length=500)
     topic_category: str | None = None
     user_background: str | None = Field(default=None, max_length=4000)
     user_id: str | None = None
     selected_expert_ids: list[str] | None = None
+    # PRD §13.4: 决策路径 bundle(可选, 老客户端不带也能创建会议)
+    idempotency_key: str | None = Field(default=None, max_length=128)
+    decision_path_generation_id: str | None = Field(default=None, max_length=128)
+    brief_confirmation: str | None = None
+    decision_path_answers: list[AnswerPayload] = Field(default_factory=list)
 
     @field_validator("selected_expert_ids")
     @classmethod

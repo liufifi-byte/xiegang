@@ -329,3 +329,83 @@ export const TOPIC_TEMPLATES: TopicTemplate[] = [
   { category: "stocks",           display_name: "买股票",   hint: "个股" },
   { category: "buy_bag",          display_name: "买包",     hint: "消费" },
 ];
+
+// ============================================================
+// PRD v2: 决策路径(Decision Path)
+// ============================================================
+
+export type DecisionQuestionType =
+  | "single_choice"
+  | "multi_choice"
+  | "range_choice"
+  | "choice_with_custom"
+  | "search_select"
+  | "number"
+  | "short_text";
+
+export interface DecisionQuestionOption {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+export interface DecisionQuestion {
+  id: string;
+  question: string;
+  why_it_matters: string;
+  answer_type: DecisionQuestionType;
+  options: DecisionQuestionOption[];
+  allow_custom?: boolean;
+  custom_placeholder?: string;
+  unknown_assumption?: string;
+}
+
+export interface DecisionBrief {
+  decision_goal: string;
+  decision_options: string[];
+  analysis_dimensions: string[];
+  autonomous_research: string[];
+  final_deliverables: string[];
+}
+
+export interface ExtractedFact {
+  id: string;
+  label: string;
+  value: string;
+  source?: string;
+  editable?: boolean;
+}
+
+export interface DecisionAssumption {
+  question_id: string;
+  assumption_text: string;
+  conclusion_flip_condition?: string;
+}
+
+export interface DecisionPathPreview {
+  version: string;
+  generation_id: string;
+  category: string;
+  brief: DecisionBrief;
+  extracted_facts: ExtractedFact[];
+  questions: DecisionQuestion[];
+  assumptions: DecisionAssumption[];
+  fallback_used?: boolean;
+}
+
+export interface DecisionAnswerItem {
+  question_id: string;
+  /** single/range/number: string; multi: string[] */
+  value: string | string[];
+  custom_value?: string | null;
+}
+
+/** 前端 modal 状态机(PRD §12.1) */
+export type DecisionPathStatus =
+  | "idle"
+  | "generating"
+  | "ready"
+  | "revising"
+  | "confirmed"
+  | "creating_meeting"
+  | "create_failed";

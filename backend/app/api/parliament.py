@@ -58,6 +58,8 @@ async def create_parliament(req: CreateParliamentRequest, request: Request) -> d
 
     P0-S1.1: 加了 IP + device_id 双轨限流。
     P0-S2 fix: 开发环境（APP_ENV=development）跳过限流方便测试。
+    PRD v2: 如果带了 decision_path_generation_id, 校验确认 + consume 草稿 +
+            把 decision_path bundle 写入 parliaments.decision_path。
     """
     settings = get_settings()
     ip = _get_client_ip(request)
@@ -77,7 +79,74 @@ async def create_parliament(req: CreateParliamentRequest, request: Request) -> d
                 content={"detail": reason, "retry_after_seconds": 60},
             )
 
+    # PRD v2 §13.4: 决策路径校验 + consume
+    decision_path_payload: dict = {}
+    decision_path_status = "legacy"
+    decision_path_confirmed_at = None
+    if req.decision_path_generation_id:
+        if req.brief_confirmation != "confirmed":
+            raise HTTPException(
+                status_code=400,
+                detail="使用 decision path 时必须 brief_confirmation=confirmed",
+            )
+        from app.schemas.decision_path import AnswerItem
+        from app.services.decision_path import (
+            build_expert_payload_from_draft,
+            consume_draft,
+            load_preview_by_id,
+        )
+        from datetime import datetime, timezone
+
+        draft = load_preview_by_id(req.decision_path_generation_id, device_id)
+        if draft is None:
+            raise HTTPException(
+                status_code=404,
+                detail="决策路径草稿不存在、已过期或已被使用",
+            )
+        # 校验所有问题都有答案(包括 unknown)
+        answers = [
+            AnswerItem(question_id=a.question_id, value=a.value, custom_value=a.custom_value)
+            for a in req.decision_path_answers
+        ]
+        answered_ids = {a.question_id for a in answers}
+        required_ids = {q.id for q in draft.questions}
+        missing = required_ids - answered_ids
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"以下问题必须回答或选择不确定: {', '.join(sorted(missing))}",
+            )
+        # 构造专家 context payload
+        decision_path_payload = build_expert_payload_from_draft(draft, answers)
+        # PRD §13.2: 事务内 consume(简化版)
+        ok = consume_draft(req.decision_path_generation_id, device_id)
+        if not ok:
+            raise HTTPException(
+                status_code=409,
+                detail="决策路径草稿已被使用或失效，请重新生成",
+            )
+        decision_path_status = "confirmed"
+        decision_path_confirmed_at = datetime.now(timezone.utc).isoformat()
+
     supabase = get_supabase()
+
+    # PRD §13.4 / §6.7: 幂等键去重(同一 idempotency_key 已存在会议则返回原议会)
+    if req.idempotency_key:
+        existing = (
+            supabase.table("parliaments")
+            .select("id")
+            .eq("idempotency_key", req.idempotency_key)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            old_id = existing.data[0]["id"]
+            return {
+                "parliament_id": old_id,
+                "stream_url": f"/api/parliament/{old_id}/stream",
+                "device_id": device_id,
+                "idempotent_reuse": True,
+            }
 
     row = {
         "topic": req.topic,
@@ -93,6 +162,11 @@ async def create_parliament(req: CreateParliamentRequest, request: Request) -> d
         "current_phase": "queued",
         # P0 fix: 不在 POST 时写 heartbeat——否则 worker 20s 内看到 heartbeat 过期就 cancel
         # 让 SSE 连上后第一次 heartbeat 才开始计时
+        # PRD v2 新字段:
+        "decision_path": decision_path_payload,
+        "decision_path_status": decision_path_status,
+        "decision_path_confirmed_at": decision_path_confirmed_at,
+        "idempotency_key": req.idempotency_key,
     }
     result = supabase.table("parliaments").insert(row).execute()
 

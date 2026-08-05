@@ -196,3 +196,74 @@ export async function getCurrentParliament(): Promise<CurrentParliament | null> 
   const data = await res.json();
   return data.item || null;
 }
+
+// ============================================================
+// PRD v2: 决策路径 API
+// ============================================================
+import type {
+  DecisionAnswerItem,
+  DecisionPathPreview,
+  DecisionPathStatus,
+} from "./types";
+
+export interface CreateParliamentV2Payload {
+  topic: string;
+  topic_category?: string | null;
+  user_background?: string | null;
+  selected_expert_ids?: string[] | null;
+  idempotency_key?: string;
+  decision_path_generation_id?: string;
+  brief_confirmation?: "confirmed";
+  decision_path_answers?: DecisionAnswerItem[];
+}
+
+export interface DecisionPathPreviewRequest {
+  topic: string;
+  topic_category?: string | null;
+  user_background?: string | null;
+  selected_expert_ids?: string[] | null;
+  generation_id?: string | null;
+  brief_feedback?: string | null;
+  existing_answers?: DecisionAnswerItem[];
+}
+
+export async function previewDecisionPath(
+  payload: DecisionPathPreviewRequest,
+): Promise<DecisionPathPreview> {
+  const res = await fetch(`${API_BASE}/api/decision-path/preview`, {
+    method: "POST",
+    headers: buildHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`previewDecisionPath ${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
+export async function deleteDecisionPath(generationId: string): Promise<void> {
+  await fetch(`${API_BASE}/api/decision-path/${generationId}`, {
+    method: "DELETE",
+    headers: buildHeaders(),
+  });
+}
+
+export async function createParliamentV2(
+  payload: CreateParliamentV2Payload,
+): Promise<CreateParliamentResponse> {
+  const res = await fetch(`${API_BASE}/api/parliament`, {
+    method: "POST",
+    headers: buildHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  if (res.status === 429) {
+    const data = await res.json().catch(() => ({ detail: "请求过于频繁", retry_after_seconds: 60 }));
+    throw new RateLimitError(data.detail, data.retry_after_seconds ?? 60);
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`createParliamentV2 ${res.status}: ${text}`);
+  }
+  return res.json();
+}
