@@ -76,13 +76,27 @@ const API_BASE =
 /**
  * 订阅议会 SSE 流。
  * 返回 unsubscribe 函数。
+ *
+ * EventSource 标准 API 不支持自定义 header,所以 device_id 通过 query 传
+ * (后端 stream.py 优先从 query_params 读)。
  */
 export function subscribeParliament(
   parliamentId: string,
   onEvent: (event: ParliamentStreamEvent) => void,
   onError?: (error: Error) => void
 ): () => void {
-  const url = `${API_BASE}/api/parliament/${parliamentId}/stream`;
+  // 拿 device_id (localStorage 里的稳定 UUID, 或 fallback 用 ip:xxx)
+  let deviceId = "";
+  try {
+    deviceId =
+      typeof localStorage !== "undefined"
+        ? localStorage.getItem("xiegang_device_id") || ""
+        : "";
+  } catch {
+    // localStorage 不可用(Safari 隐私检 / SSR), 走空让后端 fallback IP
+  }
+  const qs = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : "";
+  const url = `${API_BASE}/api/parliament/${parliamentId}/stream${qs}`;
   let eventSource: EventSource | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;

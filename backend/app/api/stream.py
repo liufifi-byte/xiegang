@@ -66,8 +66,20 @@ async def stream_parliament(parliament_id: str, request: Request):
         # 加上 Next.js rewrite 不转发 X-Device-Id，导致开发时容易误拦
         settings = get_settings()
         if stored_device and settings.app_env != "development":
-            request_device = _get_device_id(request)
-            if request_device != stored_device:
+            # CDN/反代下 X-Forwarded-For 是 CDN 节点 IP, 跟"提交议题"时的 client IP
+            # 不匹配; 改用 ?device_id=xxx 查询参数 (浏览器 EventSource 支持 query).
+            request_device = (
+                request.query_params.get("device_id")
+                or request.headers.get("X-Device-Id")
+                or f"ip:{_get_client_ip(request)}"
+            )
+            # 兼容 device_id 形如 "ip:xxx" 的宽松校验 (只要前缀相同就放行)
+            # 因为经过 CF 后 client IP 会改变, 严格校验不可行
+            same_user = (
+                request_device == stored_device
+                or (stored_device.startswith("ip:") and request_device.startswith("ip:"))
+            )
+            if not same_user:
                 yield {
                     "event": "message",
                     "data": json.dumps(
