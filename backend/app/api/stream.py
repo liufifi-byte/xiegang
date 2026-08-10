@@ -15,7 +15,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.config import get_settings
 from app.db import get_supabase
 from app.event_store import fetch_events_since
-from app.middleware.rate_limit import _get_device_id
+from app.middleware.rate_limit import _get_client_ip, _get_device_id
 
 logger = logging.getLogger(__name__)
 

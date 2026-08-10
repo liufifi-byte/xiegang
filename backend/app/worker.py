@@ -640,7 +640,7 @@ async def run_one_parliament(task: dict) -> None:
 async def _reclaim_stale_tasks() -> int:
     """L3 orphan 自愈：把 running 但超期无心跳的议会标 failed。
 
-    阈值由 settings.parliament_stale_seconds 控制（默认 120s，原硬编码 900s）。
+    阈值由 settings.parliament_stale_seconds 控制（默认 600s，原硬编码 900s）。
     保留 status='running' AND finished_at IS NULL 双重过滤，避免误改历史完成/取消的议会。
     """
     url = _clean_db_url()

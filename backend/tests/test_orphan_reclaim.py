@@ -65,11 +65,16 @@ def test_reclaim_threshold_uses_settings(monkeypatch):
 
 
 def test_settings_has_orphan_threshold_setting():
-    """Settings 类应当有 parliament_stale_seconds 字段，默认 120。"""
-    # 直接检查 Settings 类的字段默认值（不实例化，避免依赖 .env）
+    """Settings 类应当有 parliament_stale_seconds 字段，且默认值安全（> 议会总时长）。
+
+    断言用区间而非精确值——避免后续再调默认值时 brittle 失败。
+    既要够长（防止正常议会跑一半被回收），也不能太久（orphan 真发生时不能等太久）。
+    """
     fields = Settings.model_fields
     assert "parliament_stale_seconds" in fields
-    assert fields["parliament_stale_seconds"].default == 120
+    default = fields["parliament_stale_seconds"].default
+    # 至少 5 分钟（一场议会最小耗时），最多 30 分钟（orphan 不能等太久）
+    assert 300 <= default <= 1800, f"parliament_stale_seconds 默认值 {default} 不在合理区间"
 
 
 def test_settings_has_per_parliament_concurrency():

@@ -22,6 +22,15 @@ echo "===== [1/5] 同步 main 代码 ====="
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     origin_url=$(git config --get remote.origin.url 2>/dev/null || echo "")
     if [ -n "$origin_url" ]; then
+        # Dirty-tree 保护：reset --hard 前若有未提交改动先 stash，避免静默 wipe。
+        # 即便脚本顶部建议"不要在服务器改文件"，运维实际总会临时改 .env / nginx.conf。
+        if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+            stash_msg="pre-deploy-stash-$(date +%s)"
+            echo "  📦 检测到未提交改动,先 stash (恢复用 git stash list / git stash apply)"
+            git stash push -u -m "$stash_msg" >/dev/null 2>&1 \
+                && echo "  ✓ stash 保存为 '$stash_msg'" \
+                || echo "  ⚠️  stash 失败,继续部署（datarisk）"
+        fi
         git fetch origin main 2>/dev/null && git reset --hard origin/main || \
             echo "  ⚠️  git fetch 失败(国内访问 GitHub 受限),用本地 working tree 继续"
     fi
