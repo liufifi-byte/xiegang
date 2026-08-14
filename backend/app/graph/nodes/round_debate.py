@@ -391,24 +391,47 @@ async def run_debate_round(state: dict) -> dict:
                     flush=True,
                 )
             else:
-                # timeout / 网络 / 其他真 exception：按原有"未及时回应"
+                # timeout / 网络 / 其他真 exception：
+                # 改为议员本人的降级发言（标 type=debate_degraded），不再写 system_msg。
+                # 这样 council_rounds.assess_third_round 不会因 debate_error 强制开第三轮，
+                # 议会更可能干净收敛。
+                prev_entry_for_speaker = next(
+                    (e for e in reversed(new_transcript)
+                     if e.get("speaker") == speaker and e.get("stance")
+                     and e.get("type") not in ("debate_error", "debate_degraded")),
+                    None,
+                )
+                prev_stance = (prev_entry_for_speaker or {}).get("stance", "neutral")
+                stance_zh = {
+                    "for": "支持", "against": "反对", "neutral": "保留意见"
+                }.get(prev_stance, "保留意见")
+                degraded_text = (
+                    f"{speaker_name}：本轮时间或网络受限，未发表新的质疑或补充，"
+                    f"维持此前{stance_zh}的立场。"
+                )
                 new_entries.append({
-                    "speaker": "system",
+                    "speaker": speaker,
                     "round": next_round,
-                    "type": "debate_error",
-                    "stance": "neutral",
-                    "content": f"{speaker_name}本轮未及时回应，会议继续进行。",
+                    "type": "debate_degraded",
+                    "stance": prev_stance,
+                    "content": degraded_text,
                     "evidence": [],
-                    "confidence": 0.0,
-                    "failed_speaker": speaker,
+                    "confidence": 0.3,
+                    "degraded": True,
+                    "degradation_reason": err_str[:200],
                 })
                 tool_calls_log.append({
                     "member": speaker,
-                    "action": "debate_error",
+                    "action": "debate_degraded",
                     "round": next_round,
-                    "error": str(err),
+                    "error": err_str[:200],
                     "timestamp": time.time(),
                 })
+                print(
+                    f"[debate] DEGRADED parliament={parliament_id} "
+                    f"member={speaker} round={next_round} → 维持 {prev_stance}",
+                    flush=True,
+                )
 
     # 张力
     stances = [e["stance"] for e in new_entries if e.get("stance")]

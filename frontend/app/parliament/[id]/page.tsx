@@ -493,19 +493,19 @@ export default function ParliamentPage() {
   }, [parliamentId, status]);
 
   // ============================
-  // 离开页面自动取消会议(用户需求)
-  // 组件卸载(返回上一页/关页面/路由跳转)时主动调 cancel API
-  // 只有议会还在(non-terminal)状态时才取消
-  // 用 fetch keepalive 确保即使页面正在关闭请求也能发出
+  // 组件卸载时不再自动取消议会
+  // ----------------------------
+  // 历史：早期版本"卸载即 cancel"。问题是网络抖动（ERR_NETWORK_CHANGED）
+  //   → React 组件 remount → 触发 cancel → 后台正在跑的 5 个 Agent 全被砍。
+  //   用户体感就是"运行到一半失败"，实际是前端自己砍自己。
+  // 现在：让后端 parliament_total_timeout 兜底（1200s 内议会能正常跑完）。
+  //   用户刷新页面 / 切网络 → SSE 自动重连（lib/sse.ts 已实现），
+  //   议会继续跑，用户回去能看到完整进度。
+  //   仅在用户**明确点击"结束议会"**时才调 cancel（见 handleEndParliament）。
   // ============================
   useEffect(() => {
     return () => {
-      const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "";
-      fetch(`${apiBase}/api/parliament/${parliamentId}/cancel`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        keepalive: true,
-      }).catch(() => {});
+      // 不调 /cancel API——避免网络抖动误杀正在跑的议会
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parliamentId]);

@@ -99,7 +99,8 @@ def test_run_debate_round_increments_round(monkeypatch):
     debates_r1 = [e for e in result["transcript"] if e["round"] == 1]
     assert len(debates_r1) == 5
     for entry in debates_r1:
-        assert entry["type"] in ("debate", "debate_error", "user_interrupt")
+        # P0 修复后失效的议员降级发言改成 type=debate_degraded（不再是 system debate_error）
+        assert entry["type"] in ("debate", "debate_error", "debate_degraded", "user_interrupt")
 
 
 def test_run_debate_round_preserves_existing_transcript(monkeypatch):
@@ -186,9 +187,13 @@ def test_run_debate_round_handles_member_error(monkeypatch):
     result = asyncio.run(run_debate_round(state))
     # 5 条都在
     assert len([e for e in result["transcript"] if e["round"] == 1]) == 5
-    # 至少有一个 ERROR 标记
-    error_entries = [e for e in result["transcript"] if e["type"] == "debate_error"]
-    assert len(error_entries) == 1
+    # P0 修复后：失败的议员降级发言（type=debate_degraded），不再是系统 error。
+    # 断言兼容两种过渡状态：仍允许旧 debate_error 或新 debate_degraded。
+    degraded_entries = [
+        e for e in result["transcript"]
+        if e["type"] in ("debate_error", "debate_degraded")
+    ]
+    assert len(degraded_entries) == 1
 
 
 def test_run_debate_round_injects_user_interrupt(monkeypatch):

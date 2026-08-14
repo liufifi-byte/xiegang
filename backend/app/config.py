@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # Independent GLM Web Search API
     web_search_engine: str = "search_std"
     web_search_timeout_seconds: float = 15.0
+    # require_fresh=True 时本地丢弃早于此年份的结果（默认去年）。
+    # GLM 服务端 oneYear 过滤不严格，会漏进 2023/2024 旧文，靠这里再砍一刀。
+    web_search_min_publish_year: int = 2025
     # Kept optional only so older local .env files continue to load.
     tavily_api_key: str = ""
 
@@ -44,14 +47,21 @@ class Settings(BaseSettings):
     # P0-S1.4 CORS
     cors_origins: str = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001"
 
-    # P0-S1.2 议会总超时（秒）
-    parliament_total_timeout: int = 720  # 12 分钟（含 web search + ReAct 调研 + 3 轮议会 + 选举 + 总结）
+    # 议会总超时（秒）。完整议会跑 5 Agent research + 3 轮 debate + 选举 + 总结
+    # 实测稳定 runtime 是 14-20 分钟，720s 不够经常 fail。改 1200s 留充分余量。
+    parliament_total_timeout: int = 1200
 
     # Expert ReAct Agent 执行预算
-    agent_max_reason_steps: int = 3
-    agent_max_tool_calls: int = 1
+    # max_reason_steps：每个 Agent 的推理步数。ReAct 完整链 ≈ reason→tool→observe→reason→finish 共 5 步，
+    # 3 步会在第 2 次 reason 触底 → AgentBudgetExceeded → fallback。改 5 覆盖典型链。
+    agent_max_reason_steps: int = 5
+    # max_tool_calls：1 太严格——专家常需 2 次搜索（如核心数据+补充政策）。
+    # 改 2 覆盖大多数场景，同时不至于显著拖累总耗时。
+    agent_max_tool_calls: int = 2
     agent_tool_timeout_seconds: int = 15
-    agent_total_timeout_seconds: int = 120
+    # 单 Agent 总超时。120s 不够 ReAct 多步推理 + GLM 慢响应场景，
+    # 经常砍断单 Agent → 写"未完成"文案。改 180s 给复杂议题留余量。
+    agent_total_timeout_seconds: int = 180
     agent_research_node_timeout_seconds: int = 135
     agent_max_observation_chars: int = 4000
     agent_max_evidence: int = 3
@@ -67,10 +77,9 @@ class Settings(BaseSettings):
     # （只用于本机需要同时跑多个 worker 联调时）
     worker_allow_duplicate: bool = False
 
-    # L3 orphan 自愈阈值（秒）：超过这个时间无 heartbeat 的 running 议会被认作 orphan，
-    # 在 worker_loop 内每 30s 扫一次。必须 > parliament_total_timeout，否则议会跑一半被 reclaim。
-    # 默认 600s（10 分钟）：一场完整议会 < 10 分钟，留足安全余量。
-    parliament_stale_seconds: int = 600
+    # L3 orphan 自愈阈值（秒）。必须 > parliament_total_timeout，否则正常议会被误杀。
+    # 议会最长 1200s，留 5 分钟 cushion，故 1800s。
+    parliament_stale_seconds: int = 1800
 
     # 每议会公平分槽：单议会内同时飞的最大 LLM 请求数。
     # 配合全局 LLM_MAX_CONCURRENCY 实现"跨议会公平 + 议会内公平"。

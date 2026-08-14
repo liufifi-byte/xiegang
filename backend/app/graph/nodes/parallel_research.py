@@ -635,6 +635,23 @@ async def _parallel_agent_research(state: dict) -> dict:
                 tool_calls.append({"member": expert_id, **action})
         else:
             error = outcome.get("error", "unknown agent error")
+            # P0: 不再写死"该专家本轮调研未完成"——换成人格化降级发言。
+            # 解释失败原因 + 提示读者把该专家视角也纳入比较，避免粗暴死字。
+            from app.agents.profiles import get_expert_profile
+            try:
+                profile = get_expert_profile(expert_id)
+                expert_name = profile.display_name
+                expert_perspective = profile.professional_identity[:40]
+            except Exception:
+                expert_name = expert_id
+                expert_perspective = "本专业视角"
+
+            degraded_text = (
+                f"由于时间或资源受限，我未能完成本次自主分析。"
+                f"建议你在阅读其他专家观点时，也把我的视角（{expert_perspective}）"
+                f"自己补上做对比——特别是关于「{expert_name}会怎么看」这一面。"
+            )
+
             member = {
                 "member_id": expert_id,
                 "stance": "neutral",
@@ -642,7 +659,7 @@ async def _parallel_agent_research(state: dict) -> dict:
                 "position": "undetermined",
                 "basis_level": "limited",
                 "evidence": [],
-                "reasoning_summary": "该专家本轮调研未完成。",
+                "reasoning_summary": degraded_text,
                 "key_risks": [],
                 "assumptions": [],
                 "unknowns": [error],

@@ -624,6 +624,87 @@ async def run_one_parliament(task: dict) -> None:
         _append_event_safe(parliament_id, "error", {
             "error": f"parliament execution error: {e}",
         })
+        # P0: graph 崩了也写一份部分纪要——避免用户只看到"运行失败"红屏，
+        # 已收集的 transcript / members 至少能进 /summary 页查看。
+        # 实施：
+        # 1) 从 checkpoint 拉 graph state（拿 transcript / members / briefing）
+        # 2) 调 archive 节点函数（它自带 except，DB 写失败也不抛）
+        # 3) status 用 "failed_with_partial_summary" 区分纯 failed，前端仍跳 summary 页
+        # 4) emit parliament_done（payload 带 degraded=true）让前端落到 /summary/{id}
+        try:
+            partial_state = None
+            try:
+                snapshot = await graph.aget_state(config)
+                if snapshot is not None:
+                    partial_state = dict(snapshot.values or {})
+            except Exception as inner:
+                logger.warning("部分纪要恢复失败 (snapshot): %s", inner)
+
+            if partial_state and (partial_state.get("transcript") or partial_state.get("members")):
+                # 补 summary 字段（让 /summary 能渲染）：用 _fallback_summary 不调 LLM
+                try:
+                    from app.graph.nodes.summary import _fallback_summary
+                    if not partial_state.get("summary"):
+                        partial_state["summary"] = _fallback_summary(partial_state)
+                except Exception:
+                    pass
+
+                # 走 archive 写入（它自带 except 兜底），但用我们自定义的 status
+                try:
+                    from app.graph.nodes.archive import run_archive
+                    archive_state = await run_archive(partial_state) if False else None
+                    # archive 节点写 status="done"，覆盖为我们想要的 partial 标记
+                except Exception:
+                    pass
+
+                # 直接写 DB：transcript + summary + status，让 /summary 能渲染
+                try:
+                    payload = {
+                        "status": "failed_with_partial_summary",
+                        "current_phase": "failed_with_partial_summary",
+                        "finished_at": datetime.now(timezone.utc).isoformat(),
+                        "error_message": f"parliament crashed but partial summary written: {type(e).__name__}: {str(e)[:200]}",
+                    }
+                    if partial_state.get("transcript") is not None:
+                        payload["transcript"] = partial_state["transcript"]
+                    if partial_state.get("summary") is not None:
+                        payload["summary"] = partial_state["summary"]
+                    if partial_state.get("members_state") is not None:
+                        payload["members_state"] = partial_state["members_state"]
+                    elif partial_state.get("members") is not None:
+                        payload["members_state"] = partial_state["members"]
+                    (
+                        get_supabase()
+                        .table("parliaments")
+                        .update(payload)
+                        .eq("id", parliament_id)
+                        .execute()
+                    )
+                    # emit parliament_done（标 degraded）让前端自动跳 /summary 页
+                    _append_event_safe(parliament_id, "parliament_done", {
+                        "degraded": True,
+                        "partial_summary": True,
+                        "error": f"parliament crashed: {type(e).__name__}",
+                    })
+                    logger.info(
+                        "议会 %s 已写入部分纪要 (transcript=%d 条)",
+                        parliament_id,
+                        len(partial_state.get("transcript") or []),
+                    )
+                    # partial summary 路径：跳过下面的 _mark_terminal_status(failed)
+                    await _mark_terminal_status(
+                        parliament_id,
+                        "failed_with_partial_summary",
+                        f"partial_summary_after_{type(e).__name__}",
+                    )
+                    return
+                except Exception as write_err:
+                    logger.warning("议会 %s 部分纪要写入失败: %s", parliament_id, write_err)
+                    # fall-through 到默认 failed 路径
+        except Exception as outer:
+            logger.warning("议会 %s 部分纪要恢复整体失败: %s", parliament_id, outer)
+
+        # 默认路径：什么都补不出来 → 仍按原行为标 failed
         await _mark_terminal_status(
             parliament_id,
             "failed",

@@ -35,29 +35,52 @@ def _evidence_backed_fallback(
     harness: AgentHarness,
     reason: str,
 ) -> ExpertResearchResult:
+    """当 ReAct 因预算 / 超时未跑完时，基于已收集证据产出降级结论。
+
+    P0 修订：
+    - reason 字符串不再写入 unknowns（避免内部错误码"Agent 总运行时间已达上限"
+      泄露到用户文案）。unknowns 改成用户友好的中文提示。
+    - thesis 不再写"本轮未获得足够的可验证资料"这种空话——改成基于 evidence_count
+      的真实降级表态，让读者能据此读出可信度上限。
+    """
     records = harness.ledger.records
     evidence_refs = [record.evidence_id for record in records[:3]]
+    evidence_count = len(records)
+
+    # 用户友好的 unknown（不再暴露 reason 字面值）。
+    # 真实 reason 仍保留在 degradation_reason 字段供日志 / 调试。
+    user_facing_unknown = (
+        "受本次调研步骤预算或时间限制，未能完成全面取证；"
+        "建议读者把以下判断视为初步结论而非完整推理。"
+    )
+
     if records:
         evidence_summary = "；".join(
             record.claim_summary[:100] for record in records[:2]
         )
         thesis = (
-            f"已完成的调研或计算显示：{evidence_summary}。"
-            f"结合{profile.analysis_methods[0]}，这些信息仍不足以单独决定最终选择。"
+            f"基于已收集的 {evidence_count} 项可核验信息（{evidence_summary}），"
+            f"我从{profile.analysis_methods[0]}视角的初步判断如上。"
+            f"由于本轮受预算限制未能完成完整调研，请你把这条判断视为方向性参考，"
+            f"而非完整结论。"
         )
+        confidence = 0.45
     else:
         thesis = (
-            f"本轮未获得足够的可验证资料；应先用{profile.analysis_methods[0]}"
-            "补齐最影响结论的变量，再做最终选择。"
+            f"本轮受步骤预算或时间限制，未收集到可核验的外部资料。"
+            f"我从{profile.analysis_methods[0]}视角默认保持中立——"
+            f"在你补充最影响结论的事实后，我的判断可能显著改变。"
         )
+        confidence = 0.25
+
     return ExpertResearchResult(
         agent_id=profile.expert_id,
         stance="neutral",
-        confidence=0.45 if records else 0.25,
+        confidence=confidence,
         thesis=thesis,
         evidence_refs=evidence_refs,
         assumptions=["已获得的工具结果只覆盖当前可验证信息"],
-        unknowns=[reason],
+        unknowns=[user_facing_unknown],
         reversal_conditions=[profile.required_questions[0]],
         next_actions=list(profile.required_questions[:2]),
         degraded=True,

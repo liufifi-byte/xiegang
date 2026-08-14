@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Any
 
@@ -21,6 +22,8 @@ from app.agents.research_graph import (
 )
 from app.agents.tool_registry import ToolContext, ToolRegistry
 from app.agents.trace import AgentTraceSink
+
+logger = logging.getLogger(__name__)
 
 
 class ExpertResearchAgentRunner:
@@ -97,8 +100,20 @@ class ExpertResearchAgentRunner:
                 graph.ainvoke(state, config=config),
                 timeout=max(0.01, self.harness.budget.remaining_seconds),
             )
-        except (TimeoutError, AgentBudgetExceeded):
-            reason = "Agent 总运行时间已达到上限"
+        except (TimeoutError, AgentBudgetExceeded) as budget_exc:
+            # P0 修订：reason 文案不要写"总运行时间已达上限"——这是误导用户。
+            # 真实异常（TimeoutError vs AgentBudgetExceeded）+ 真实信息只写入 degradation_reason
+            # 字段供日志；用户看不到内部错误码。
+            reason_kind = (
+                "时间上限"
+                if isinstance(budget_exc, TimeoutError)
+                else "步骤预算"
+            )
+            logger.warning(
+                "Agent %s 触发 %s 限制: %s",
+                self.profile.expert_id, reason_kind, budget_exc,
+            )
+            reason = f"受本次调研{reason_kind}限制，未能完成完整推理"
             result = self.harness.validate_result(
                 _evidence_backed_fallback(self.profile, self.harness, reason),
                 forced_reason=reason,
