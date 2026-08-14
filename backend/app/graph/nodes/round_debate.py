@@ -55,9 +55,16 @@ DEBATE_PROMPT = """你是 Decision Council 的{member_name}。
 - 没有可核验来源时不得生成精确市场数据或历史统计
 - 可以调整立场，但必须说明是哪条新信息改变了判断
 - 当对方的证据比你的更可靠、或指出你忽略的关键变量时，**必须**承认——这是专业判断的演化，不是人格缺陷。被说服的发言比硬挺到底更有价值。
-- 不能重复前面已经说过的内容
-- 模仿职业范例的锐度和判断密度，但绝不能复制范例中的数字、年份和事实；禁止戏剧化比喻与情感操控词
-- 不要用“各有利弊、因人而异、建议综合考虑”代替专业判断
+- 不能重复前面已经说过的内容：已被前序发言提及的事实（如违约金金额、用户已说"不知道"）最多复述 1 条且必须带新角度，主体必须是新增信息或新推理
+- 模仿职业范例的锐度和判断密度，但绝不能复制范例中的数字、年份和事实；禁止戏剧化比喻（绞索、火坑、赌博人生）与恐吓式修辞——锐度来自事实力度
+- 不要用"各有利弊、因人而异、建议综合考虑"代替专业判断
+
+表达规则（C 端用户直接阅读）：
+- 全文中文，不出现英文专家代号（如 Politician/Economist）——提及同事一律用中文席位名（政治家/经济学家/数学家/心理学家/艺术家/历史学家）
+- 直接对用户用"你"，不要用第三人称"用户"称呼决策者
+- 不使用 markdown 星号加粗（**文字**），需要强调时用中文引号或冒号
+- 引用证据时说"依据 N"或描述内容，不写 [ev_xxx] 这类内部编号
+- 提出质疑时，附一句"若要继续推进，需补齐的 1-2 个具体条件"，让批评配出口
 
 ## 输出要求
 严格 JSON（不要 markdown 代码块、不要其他文字）：
@@ -317,12 +324,15 @@ async def run_debate_round(state: dict) -> dict:
     for outcome in results:
         if outcome["ok"]:
             stmt: MemberStatement = outcome["data"]
+            # P0: 辩论 content 入库前过清洗层——剥 ev_id/星号、统一专家称呼、
+            # 清系统术语、规整标点。所有 C 端可见文本必经此关。
+            from app.graph.nodes.text_sanitizer import clean_visible_text
             entry = {
                 "speaker": stmt.member_id,
                 "round": next_round,
                 "type": "debate",
                 "stance": stmt.stance,
-                "content": stmt.reasoning_summary,
+                "content": clean_visible_text(stmt.reasoning_summary),
                 "evidence": [e.model_dump() for e in stmt.evidence],
                 "confidence": stmt.confidence,
                 "basis_level": initial_stances.get(

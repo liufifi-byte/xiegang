@@ -58,19 +58,22 @@ def test_render_drops_old_section_headers():
 
 
 def test_render_keeps_four_new_headers():
-    """新版本 4 个段标题应正确出现。"""
+    """新版本 4 个段标题应正确出现。
+
+    P0 渲染统一后段名与辩论轮对齐：【关键依据】【主要风险】（原【最关键的依据】【风险与未知】）。
+    """
     out = _render_public_research_statement(_make_result(), _EVIDENCE)
     for header in (
         "【我的判断】",
-        "【最关键的依据】",
-        "【风险与未知】",
+        "【关键依据】",
+        "【主要风险】",
         "【什么时候我会改变判断】",
     ):
         assert header in out, f"新标题缺失: {header}"
 
 
 def test_render_merges_assumptions_into_evidence():
-    """assumptions 被并入【最关键的依据】段（标注'核心假设'）。"""
+    """assumptions 被并入【关键依据】段（标注'核心假设'）。"""
     out = _render_public_research_statement(_make_result(), _EVIDENCE)
     assert "核心假设" in out
     # 确保合并而不是独立段
@@ -78,10 +81,9 @@ def test_render_merges_assumptions_into_evidence():
 
 
 def test_render_merges_risks_and_unknowns_into_one():
-    """key_risks + unknowns 合并到【风险与未知】。"""
+    """key_risks + unknowns 合并到【主要风险】。"""
     out = _render_public_research_statement(_make_result(), _EVIDENCE)
-    # 两类内容都应在【风险与未知】段附近
-    risk_section = out.split("【风险与未知】")[1]
+    risk_section = out.split("【主要风险】")[1]
     assert "需要用钱时被迫退出" in risk_section
     assert "仍需确认" in risk_section
     assert "是否另有应急储备" in risk_section
@@ -94,7 +96,9 @@ def test_render_works_without_evidence_records():
 
 
 def test_render_handles_degraded_result():
-    """degraded=True 时 degradation_reason 应并入 unknowns。"""
+    """degraded=True 时：内部 reason 不再外露（P0 修复目的），
+    用户看到的是固定的"本轮分析受限"提示。
+    """
     out = _render_public_research_statement(
         _make_result(
             degraded=True,
@@ -102,7 +106,12 @@ def test_render_handles_degraded_result():
         ),
         _EVIDENCE,
     )
-    assert "超时强制 finalize" in out
+    # 内部错误码/系统术语不得出现在用户可见文案
+    assert "超时强制" not in out
+    assert "预算" not in out
+    assert "上限" not in out
+    # 固定降级提示应在
+    assert "本轮分析受限" in out
 
 
 def test_render_next_actions_field_dropped_but_other_fields_remain():

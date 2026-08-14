@@ -166,8 +166,8 @@ def test_public_research_statement_combines_structured_analysis():
 
     for heading in (
         "【我的判断】",
-        "【最关键的依据】",
-        "【风险与未知】",
+        "【关键依据】",
+        "【主要风险】",
         "【什么时候我会改变判断】",
     ):
         assert heading in content

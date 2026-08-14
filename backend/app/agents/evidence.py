@@ -33,6 +33,19 @@ class EvidenceLedger:
             if observation.tool_name == "web_search" and not item.url:
                 # A search snippet without an inspectable source is not web evidence.
                 continue
+
+            # P0 同事件去重：同一 URL 已入账，或内容开头高度雷同（不同来源转述
+            # 同一事件，如"字节全员会"被两家媒体各发一遍）→ 跳过。
+            existing_urls = {r.source_url for r in self._records.values()}
+            if item.url and item.url in existing_urls:
+                continue
+            new_head = (item.content or "")[:60]
+            if any(
+                (r.claim_summary or "")[:60] == new_head and new_head
+                for r in self._records.values()
+            ):
+                continue
+
             kind = {
                 "web_search": "web_source",
                 "calculator": "calculation",

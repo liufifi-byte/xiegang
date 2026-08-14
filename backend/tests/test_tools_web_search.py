@@ -72,6 +72,8 @@ def test_glm_web_search_returns_structured_openable_sources(monkeypatch):
             "score": 0.92,
             "media": "官方机构",
             "publish_date": "2026-07-01",
+            # P0: 信源分级字段（example.com 不在 trusted/blog 白名单 → media）
+            "source_grade": "media",
         }
     ]
 

@@ -485,12 +485,18 @@ def _agent_result_to_member(
                 "evidence_id": ref,
             }
         )
+
+    # P0: 判断基础标签不再让 LLM 自评——按证据条数 + degraded 规则计算，
+    # 修复"1 条证据标较强 / fallback 标一般"的倒挂。
+    from app.graph.nodes.text_sanitizer import compute_basis_level
+    rule_basis = compute_basis_level(len(evidence), result.degraded)
+
     return {
         "member_id": expert_id,
         "stance": result.stance,
         "confidence": result.confidence,
         "position": result.position,
-        "basis_level": result.basis_level,
+        "basis_level": rule_basis,
         "evidence": evidence,
         "reasoning_summary": result.thesis,
         "key_risks": result.key_risks,
@@ -521,57 +527,49 @@ def _render_public_research_statement(
     evidence_by_id = {
         record.get("evidence_id"): record for record in evidence_records
     }
-    evidence_lines = []
-    for ref in result.evidence_refs:
-        record = evidence_by_id.get(ref)
-        if not record:
-            continue
-        kind = {
-            "user_fact": "用户信息",
-            "web_source": "网页来源",
-            "calculation": "计算结果",
-            "inference": "推断假设",
-        }.get(record.get("kind"), "分析依据")
-        claim = str(
-            record.get("supports_claim")
-            or record.get("claim_summary")
-            or ""
-        ).strip()
-        source = str(
-            record.get("source_title")
-            or record.get("source_domain")
-            or ""
-        ).strip()
-        detail = claim or source
-        if detail:
-            evidence_lines.append(f"{kind}：{detail}")
+    # P0 渲染改造：证据走 sanitizer 的编号列表 + 摘要 + 域名 + 信源分级
+    from app.graph.nodes.text_sanitizer import (
+        clean_visible_text as _clean,
+        format_evidence_list as _fmt_evidence,
+    )
+    visible_records = [
+        evidence_by_id[ref]
+        for ref in result.evidence_refs
+        if ref in evidence_by_id
+    ]
+    evidence_lines = _fmt_evidence(visible_records)
 
     evidence_text = (
-        "；".join(evidence_lines)
+        "\n".join(evidence_lines)
         if evidence_lines
         else "本轮没有获得可核验的外部来源，以下结论只使用用户信息与明确假设"
     )
-    unknowns = list(result.unknowns)
-    if result.degraded and result.degradation_reason:
-        unknowns.append(result.degradation_reason)
+    unknowns = [
+        u for u in result.unknowns if u and "预算" not in u and "上限" not in u
+    ]
+    # degraded 的内部 reason 不再进入用户可见文案——由下方固定降级说明替代
 
     # 改造 4：6 段 → 4 段，密度优先于铺张结构。
     # 把 assumptions 并入【依据】，key_risks 与 unknowns 合并到【风险与未知】，
     # 去掉"下一步动作"段（移到纪要阶段处理），让单段发言更紧凑、更易读。
     if result.assumptions:
-        assumption_text = f" 核心假设：{_format_list(result.assumptions, '')}。"
+        assumption_text = f"\n核心假设：{_clean(_format_list(result.assumptions, ''))}"
         evidence_text = evidence_text + assumption_text
 
-    risk_pieces = list(result.key_risks)
+    risk_pieces = [_clean(r) for r in result.key_risks if r]
     if unknowns:
-        risk_pieces.append("仍需确认：" + _format_list(unknowns, ""))
+        risk_pieces.append("仍需确认：" + _clean(_format_list(unknowns, "")))
+    if result.degraded:
+        risk_pieces.append("本轮分析受限，结论请与其他专家交叉比对")
+
+    thesis_text = _clean(result.thesis.strip())
 
     return "\n\n".join(
         (
-            f"【我的判断】{stance_label}。{result.thesis.strip()}",
-            f"【最关键的依据】{evidence_text}。",
-            f"【风险与未知】{_format_list(risk_pieces, '关键下行风险仍需结合用户实际承受能力确认')}。",
-            f"【什么时候我会改变判断】{_format_list(result.reversal_conditions, '关键条件发生实质变化时重新评估')}。",
+            f"【我的判断】{stance_label}。{thesis_text}",
+            f"【关键依据】{evidence_text}",
+            f"【主要风险】{_format_list(risk_pieces, '关键下行风险仍需结合用户实际承受能力确认')}",
+            f"【什么时候我会改变判断】{_clean(_format_list(result.reversal_conditions, '关键条件发生实质变化时重新评估'))}",
         )
     )
 

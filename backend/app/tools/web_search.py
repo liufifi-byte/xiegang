@@ -106,13 +106,21 @@ def web_search(
     raw_results = body.get("search_result") or []
 
     # 第一遍：构造结构化记录（url + content 双重过滤；解析出 publish_year）
+    # 同时过滤招聘软文/导流文 + 标注信源分级
+    from app.graph.nodes.text_sanitizer import classify_source, is_recruit_spam
+
     candidates: list[dict] = []
     incomplete = 0
+    spam_dropped = 0
     for index, item in enumerate(raw_results):
         url = str(item.get("link") or "").strip()
         content = str(item.get("content") or "").strip()
         if not url or not content:
             incomplete += 1
+            continue
+        # P0: 招聘软文 / 公众号导流文 / 房产中介页——不得进入证据池
+        if is_recruit_spam({"title": item.get("title"), "content": content, "url": url}):
+            spam_dropped += 1
             continue
         publish_date_raw = item.get("publish_date")
         candidates.append(
@@ -123,6 +131,7 @@ def web_search(
                 "score": max(0.5, 0.92 - index * 0.08),
                 "media": str(item.get("media") or ""),
                 "publish_date": publish_date_raw,
+                "source_grade": classify_source(url),  # trusted/media/blog
                 "_publish_year": _parse_publish_year(publish_date_raw),
             }
         )
@@ -131,6 +140,11 @@ def web_search(
         logger.info(
             "web_search dropped %s incomplete provider results (no url/content)",
             incomplete,
+        )
+    if spam_dropped:
+        logger.info(
+            "web_search dropped %s recruit-spam results (导流文/招聘页)",
+            spam_dropped,
         )
 
     # 第二遍：require_fresh 时本地过滤旧数据
