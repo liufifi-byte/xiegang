@@ -1,7 +1,7 @@
 """议员相关 Pydantic schemas。"""
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 Stance = Literal["support", "oppose", "cautious", "neutral"]
@@ -21,6 +21,22 @@ class MemberStatement(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     evidence: list[Evidence] = Field(default_factory=list, max_length=5)
     reasoning_summary: str
+
+    @field_validator("stance", mode="before")
+    @classmethod
+    def normalize_legacy_stance(cls, value):
+        """旧枚举归一化（for→support / against→oppose）。
+
+        辩论/研究 fallback prompt 曾长期教模型 for/against/neutral（议会
+        27b64ffc 6/6 辩论失败真凶），模型漂移仍可能输出旧值——语义等价，直接收。
+        """
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized == "for":
+                return "support"
+            if normalized == "against":
+                return "oppose"
+        return value
 
 
 class ElectionPitch(BaseModel):

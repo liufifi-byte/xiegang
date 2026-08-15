@@ -116,3 +116,26 @@ def test_native_none_result_falls_back_async(monkeypatch):
     wrapper.fast = False
     result = asyncio.run(wrapper.ainvoke("prompt"))
     assert result.risk == "竞业赔偿风险"
+
+
+def test_member_statement_normalizes_legacy_stance():
+    """议会 27b64ffc 回归：prompt 曾教模型 for/against，schema 必须归一化收下。"""
+    from app.schemas.member import MemberStatement
+
+    data = {
+        "member_id": "economist",
+        "stance": "against",
+        "confidence": 0.85,
+        "evidence": [],
+        "reasoning_summary": "【成本与回报】学费占收入31%，容错率过窄。",
+    }
+    stmt = MemberStatement.model_validate(data)
+    assert stmt.stance == "oppose"
+
+    legacy_for = MemberStatement.model_validate({**data, "stance": "for"})
+    assert legacy_for.stance == "support"
+
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        MemberStatement.model_validate({**data, "stance": "随便乱写"})

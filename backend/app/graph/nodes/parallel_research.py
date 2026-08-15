@@ -131,7 +131,7 @@ async def _research_for_member_async(
 严格 JSON 输出（不要其他文字、不要 markdown 代码块）：
 {{
   "member_id": "{member_id}",
-  "stance": "for|against|neutral",
+  "stance": "support|oppose|cautious|neutral",
   "confidence": 0.0-1.0,
   "evidence": [{{"claim": "...", "source": "...", "strength": "high|medium|low"}}],
   "reasoning_summary": "..."

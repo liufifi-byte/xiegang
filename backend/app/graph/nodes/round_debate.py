@@ -70,7 +70,7 @@ DEBATE_PROMPT = """你是 Decision Council 的{member_name}。
 严格 JSON（不要 markdown 代码块、不要其他文字）：
 {{
   "member_id": "{member_id}",
-  "stance": "for|against|neutral",
+  "stance": "support|oppose|cautious|neutral",
   "confidence": 0.0-1.0,
   "evidence": [{{"claim": "...", "source": "...", "strength": "high|medium|low"}}],
   "reasoning_summary": "符合本轮结构和字数要求的完整正式发言"
@@ -131,7 +131,7 @@ async def _debate_one_member_async(
 - 指出事实判断与价值排序的区别
 - 提出一个可执行替代方案
 结尾**必须**说明这次回应是否改变了你的立场，并给出两种范例模板之一：
-  被说服时：「我前一轮过于强调 X，但 [议员名] 的 Y 证据让我调整立场至 [for/against/neutral]」
+  被说服时：「我前一轮过于强调 X，但 [议员名] 的 Y 证据让我调整立场至 [support/oppose/cautious/neutral]」
   仍坚持时：「[议员名] 的 Z 不能改变我的判断，因为它低估了 [我的核心证据]」
 但真诚优先：确认被说服就调整，不要为了显得稳健而硬撑旧立场。"""
     else:
