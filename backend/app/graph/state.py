@@ -39,6 +39,15 @@ class ParliamentState(TypedDict):
     clarification_reason: str
     clarification_waiting: bool
 
+    # === 会前两步流（PRD v1.1 §14.3）===
+    # P0 修复：这两个 channel 之前只在 make_initial_state 的返回 dict 里，
+    # 未在 TypedDict 声明——LangGraph StateGraph 按 schema 过滤输入，
+    # 导致字段进 graph 即被丢弃：
+    #   1. clarification_gate 的 confirmed 跳过检查永远读不到（重复弹窗根因）
+    #   2. parse_topic 的 decision_path 优先分类也从没生效过
+    decision_path: dict[str, Any]
+    decision_path_status: str
+
     # === 5 议员状态 ===
     members: dict[str, dict]      # {suan: {stance, evidence, reasoning, ...}}
 

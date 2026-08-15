@@ -164,3 +164,73 @@ def test_unconfirmed_decision_path_does_not_skip():
     # fallback 分支：要么 awaiting_input（有问题）要么 not_needed（无问题），
     # 但 reason 不会是"两步流"——证明没走 skip 分支
     assert "两步流" not in (result.get("clarification_reason") or "")
+
+
+# ============================================================
+# P0 集成测试：字段必须穿过 LangGraph 的 schema 过滤存活。
+# 之前的单测直接调 assess_clarification_need(plain dict) 测不出
+# TypedDict 未声明导致字段被 StateGraph 丢弃的问题（重复弹窗真根因）。
+# ============================================================
+
+def test_decision_path_fields_survive_langgraph_schema():
+    """decision_path / decision_path_status 必须是 ParliamentState 的合法 channel，
+    否则 make_initial_state 塞进去的值会在 graph 输入时被丢弃。"""
+    from app.graph.state import ParliamentState, make_initial_state
+
+    # TypedDict 的 __annotations__ 就是 LangGraph 用来建 channel 的 schema
+    annotations = ParliamentState.__annotations__
+    assert "decision_path" in annotations, (
+        "decision_path 未在 ParliamentState TypedDict 声明——"
+        "LangGraph 会丢弃该字段，clarification_gate 读不到（重复弹窗）"
+    )
+    assert "decision_path_status" in annotations, (
+        "decision_path_status 未声明——同上，confirmed 跳过永远不生效"
+    )
+
+    state = make_initial_state(
+        "要不要跳槽",
+        decision_path={"goal": "评估风险"},
+        decision_path_status="confirmed",
+    )
+    assert state["decision_path_status"] == "confirmed"
+    assert state["decision_path"] == {"goal": "评估风险"}
+
+
+def test_confirmed_decision_path_skips_through_real_graph():
+    """端到端：初始 state 带 confirmed decision_path →
+    graph 里 gate 节点读到的也是 confirmed（不被 schema 过滤）。"""
+    import asyncio
+    from app.graph.state import make_initial_state
+
+    captured = {}
+
+    async def spy_gate(state: dict) -> dict:
+        captured["dp_status"] = state.get("decision_path_status")
+        captured["dp"] = state.get("decision_path")
+        # 直接返回 not_needed，避免调 LLM
+        return {
+            "clarification_status": "not_needed",
+            "clarification_questions": [],
+            "clarification_reason": "spy",
+        }
+
+    from langgraph.graph import StateGraph, END
+    from app.graph.state import ParliamentState
+
+    workflow = StateGraph(ParliamentState)
+    workflow.add_node("gate_spy", spy_gate)
+    workflow.set_entry_point("gate_spy")
+    workflow.add_edge("gate_spy", END)
+    graph = workflow.compile()
+
+    initial = make_initial_state(
+        "要不要跳槽",
+        decision_path={"goal": "评估风险"},
+        decision_path_status="confirmed",
+    )
+    asyncio.run(graph.ainvoke(initial, config={"configurable": {"thread_id": "t-spy"}}))
+    assert captured["dp_status"] == "confirmed", (
+        f"graph 内读到的 decision_path_status={captured['dp_status']!r}——"
+        "字段被 LangGraph schema 过滤掉了（TypedDict 缺声明的回归）"
+    )
+    assert captured["dp"] == {"goal": "评估风险"}
