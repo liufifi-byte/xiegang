@@ -113,52 +113,91 @@ class _StructuredWrapper:
     """对 with_structured_output 的容错包装。
 
     工作流程：
-      1. 先试原生 with_structured_output (走 function calling)
-      2. 仅当 (a) 异常是"纯结构化层失败"（底层 LLM 已成功返回、只是 JSON 不合规）
+      1. fast=False：先试原生 with_structured_output（走 function calling）。
+         fast=True：用 bind_tools + 强制 tool_choice（模型必须调工具，
+         不存在"回散文不调工具"的分支）。
+      2. 仅当 (a) 异常是"纯结构化层失败"（底层 LLM 已成功返回、只是结构不合规）
          且 (b) 不是限流类异常时，才用普通 invoke 调一次 + 手动剥 fence + parse。
+         注意：原生路径返回 None（部分 langchain-openai 版本在模型不调工具时
+         不抛异常而返回 None，议会 7e8f068e 线上 11/13 辩论 AttributeError 实锤）
+         同样视为结构化层失败，进入 fallback。
       3. 限流 / 网络 / 超时类异常 → 不二次调用，直接抛出，由上层兜底。
       4. 二次 parse 仍失败 → 抛融合异常（含两次错误信息）。
     """
 
     def __init__(self, schema: type[T], temperature: float, fast: bool = False):
         self.schema = schema
+        self.fast = fast
         self.llm = get_llm(temperature=temperature, fast=fast)
         if fast:
-            # glm-5-turbo 关思考后对 json_schema/json_mode 响应格式服从性差
-            # （实测返回散文或 {"answer":{...}} 错壳）；function_calling 强制
-            # 走 tool call，实测 2.0s 稳定产出合规结构。非 fast 路径保持原行为。
-            self.structured = self.llm.with_structured_output(
-                schema, method="function_calling"
-            )
+            # 事故修复（议会 7e8f068e）：服务器侧 langchain 的
+            # with_structured_output(method=function_calling) 在模型不调工具时
+            # 返回 None 而非抛异常 → 上游 stmt.stance 直接 AttributeError。
+            # 改用强制 tool_choice 的 bind_tools（NativeToolDecisionAdapter
+            # 已在生产验证的模式），args 手动 model_validate。
+            tool = {
+                "type": "function",
+                "function": {
+                    "name": schema.__name__,
+                    "description": (schema.__doc__ or "").strip()[:200]
+                    or f"返回 {schema.__name__} 结构化数据",
+                    "parameters": schema.model_json_schema(),
+                },
+            }
+            self.forced = self.llm.bind_tools([tool], tool_choice=schema.__name__)
         else:
-            self.structured = self.llm.with_structured_output(schema)
+            self.forced = None
+        self.structured = self.llm.with_structured_output(schema)
+
+    def _parse_forced(self, response) -> T | None:
+        tool_calls = getattr(response, "tool_calls", None) or []
+        if not tool_calls:
+            return None
+        first = tool_calls[0]
+        args = first.get("args") if isinstance(first, dict) else first.args
+        return self.schema.model_validate(args or {})
 
     def invoke(self, prompt, **kwargs):
-        try:
-            return self.structured.invoke(prompt, **kwargs)
-        except Exception as structured_err:
-            # 限流 / 平台过载 → 不立即补发，直接抛
-            if _is_rate_limit_error(structured_err):
-                raise
-            # 否则视为"结构化层失败"，重调一次普通 invoke 抓原文再 parse
-            response = self.llm.invoke(prompt, **kwargs)
-            content = (
-                response.content
-                if hasattr(response, "content")
-                else str(response)
-            )
-            json_str = extract_json_from_text(content)
-            data = json.loads(json_str)
+        structured_err: BaseException | None = None
+        if self.fast:
             try:
-                return self.schema.model_validate(data)
-            except Exception as validate_err:
-                # 同时记录两个错误信息，方便调试
-                raise ValueError(
-                    f"structured output fallback failed. "
-                    f"original={structured_err!r}, "
-                    f"validate={validate_err!r}, "
-                    f"raw_content[:200]={content[:200]!r}"
-                ) from structured_err
+                parsed = self._parse_forced(self.forced.invoke(prompt, **kwargs))
+                if parsed is not None:
+                    return parsed
+                structured_err = ValueError("forced tool call missing tool_calls")
+            except Exception as err:
+                if _is_rate_limit_error(err):
+                    raise
+                structured_err = err
+        else:
+            try:
+                result = self.structured.invoke(prompt, **kwargs)
+                if result is not None:
+                    return result
+                structured_err = ValueError("structured output returned None")
+            except Exception as err:
+                if _is_rate_limit_error(err):
+                    raise
+                structured_err = err
+        # 结构化层失败（异常或 None）→ 普通 invoke 抓原文再 parse
+        response = self.llm.invoke(prompt, **kwargs)
+        content = (
+            response.content
+            if hasattr(response, "content")
+            else str(response)
+        )
+        json_str = extract_json_from_text(content)
+        data = json.loads(json_str)
+        try:
+            return self.schema.model_validate(data)
+        except Exception as validate_err:
+            # 同时记录两个错误信息，方便调试
+            raise ValueError(
+                f"structured output fallback failed. "
+                f"original={structured_err!r}, "
+                f"validate={validate_err!r}, "
+                f"raw_content[:200]={content[:200]!r}"
+            ) from structured_err
 
     async def ainvoke(self, prompt, **kwargs):
         """V2-S2: 异步版本——原生 structured.ainvoke / llm.ainvoke。
@@ -166,28 +205,44 @@ class _StructuredWrapper:
         真异步路径，让 asyncio.gather 5 议员并发真正不阻塞事件循环。
         失败策略与同步版一致：限流类异常不立即补发，结构化层失败才重调。
         """
-        try:
-            return await self.structured.ainvoke(prompt, **kwargs)
-        except Exception as structured_err:
-            if _is_rate_limit_error(structured_err):
-                raise
-            response = await self.llm.ainvoke(prompt, **kwargs)
-            content = (
-                response.content
-                if hasattr(response, "content")
-                else str(response)
-            )
-            json_str = extract_json_from_text(content)
-            data = json.loads(json_str)
+        structured_err: BaseException | None = None
+        if self.fast:
             try:
-                return self.schema.model_validate(data)
-            except Exception as validate_err:
-                raise ValueError(
-                    f"structured ainvoke fallback failed. "
-                    f"original={structured_err!r}, "
-                    f"validate={validate_err!r}, "
-                    f"raw_content[:200]={content[:200]!r}"
-                ) from structured_err
+                parsed = self._parse_forced(await self.forced.ainvoke(prompt, **kwargs))
+                if parsed is not None:
+                    return parsed
+                structured_err = ValueError("forced tool call missing tool_calls")
+            except Exception as err:
+                if _is_rate_limit_error(err):
+                    raise
+                structured_err = err
+        else:
+            try:
+                result = await self.structured.ainvoke(prompt, **kwargs)
+                if result is not None:
+                    return result
+                structured_err = ValueError("structured output returned None")
+            except Exception as err:
+                if _is_rate_limit_error(err):
+                    raise
+                structured_err = err
+        response = await self.llm.ainvoke(prompt, **kwargs)
+        content = (
+            response.content
+            if hasattr(response, "content")
+            else str(response)
+        )
+        json_str = extract_json_from_text(content)
+        data = json.loads(json_str)
+        try:
+            return self.schema.model_validate(data)
+        except Exception as validate_err:
+            raise ValueError(
+                f"structured ainvoke fallback failed. "
+                f"original={structured_err!r}, "
+                f"validate={validate_err!r}, "
+                f"raw_content[:200]={content[:200]!r}"
+            ) from structured_err
 
 
 def get_structured_llm(
