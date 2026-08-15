@@ -18,7 +18,6 @@ from app.llm_concurrency import acquire_llm_slots
 from app.runtime_context import consume_user_interrupt
 from app.schemas.member import MemberStatement
 from app.agents.profiles import (
-    DUTY_LABELS,
     get_expert_profile,
     runtime_member_info,
 )
@@ -170,17 +169,19 @@ async def _debate_one_member_async(
 def _professional_role_prompt(
     member_id: str,
     fallback_role: str,
-    duty: str,
 ) -> str:
-    """Build the complete professional constitution used in every debate round."""
+    """Build the complete professional constitution used in every debate round.
+
+    V3：删除 duty 参数（spec §17.4）——附加角色专属约束（role_prompt）替代固定职责。
+    """
     try:
         profile = get_expert_profile(member_id)
     except ValueError:
-        return f"固定角色：{fallback_role}；本轮职责：{duty}。"
+        return f"固定角色：{fallback_role}。"
     return "\n".join(
         (
             f"专业身份：{profile.professional_identity}",
-            f"专业方法：{'；'.join(profile.analysis_methods)}",
+            f"专属栏目：{profile.lens_title}（你的分析应围绕此栏目）",
             f"必须检查：{'；'.join(profile.required_questions)}",
             f"表达风格：{'；'.join(profile.communication_style)}",
             f"标志性问题：{profile.signature_line}",
@@ -188,8 +189,6 @@ def _professional_role_prompt(
                 "专业边界："
                 f"{'；'.join(profile.forbidden_inferences + profile.professional_boundaries)}"
             ),
-            f"本轮额外职责：{duty}。职责只改变审查重点，不覆盖职业人格。",
-            "腔调范例：\n" + "\n".join(profile.voice_examples),
         )
     )
 
@@ -293,23 +292,13 @@ async def run_debate_round(state: dict) -> dict:
         history_str = _format_history(new_transcript, "", next_round)
 
     member_info = runtime_member_info(state, MEMBER_INFO)
-    debate_duties = state.get("debate_duties", {})
 
-    # 本场 5 位议员并发。职业方法保持稳定，议会职责只约束本轮审查重点。
+    # V3：duties 删除——辩论轮所有选中专家并发，无固定职责位
     tasks = [
         _debate_member_safe(
             mid,
             name,
-            _professional_role_prompt(
-                mid,
-                role,
-                DUTY_LABELS.get(
-                    debate_duties.get(mid, ""),
-                    "专业质询",
-                ),
-            )
-            if state.get("selected_expert_ids")
-            else role,
+            _professional_role_prompt(mid, role) if state.get("selected_expert_ids") else role,
             topic,
             variables,
             next_round,
@@ -339,10 +328,6 @@ async def run_debate_round(state: dict) -> dict:
                 "basis_level": initial_stances.get(
                     stmt.member_id, {}
                 ).get("basis_level", "limited"),
-                "duty": DUTY_LABELS.get(
-                    debate_duties.get(stmt.member_id, ""),
-                    "专业质询",
-                ),
             }
             new_entries.append(entry)
             tool_calls_log.append({
@@ -372,7 +357,7 @@ async def run_debate_round(state: dict) -> dict:
                 )
                 prev_stance = (prev_entry or {}).get("stance", "neutral")
                 stance_label = {
-                    "for": "支持", "against": "反对", "neutral": "保留意见"
+                    "support": "建议推进", "oppose": "不建议", "cautious": "谨慎推进", "neutral": "保留意见"
                 }.get(prev_stance, "保留意见")
                 fallback_text = (
                     f"{speaker_name}：受到平台内容审核限制无法展开新的论证，"
@@ -414,7 +399,7 @@ async def run_debate_round(state: dict) -> dict:
                 )
                 prev_stance = (prev_entry_for_speaker or {}).get("stance", "neutral")
                 stance_zh = {
-                    "for": "支持", "against": "反对", "neutral": "保留意见"
+                    "support": "建议推进", "oppose": "不建议", "cautious": "谨慎推进", "neutral": "保留意见"
                 }.get(prev_stance, "保留意见")
                 degraded_text = (
                     f"{speaker_name}：本轮时间或网络受限，未发表新的质疑或补充，"

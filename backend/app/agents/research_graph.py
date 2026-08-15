@@ -17,14 +17,13 @@ from app.agents.schemas import AgentDecision, ExpertAgentState, ExpertResearchRe
 def _fallback_result(agent_id: str, reason: str) -> ExpertResearchResult:
     return ExpertResearchResult(
         agent_id=agent_id,
+        relevance=0.0,
+        should_speak=False,  # spec §13.3：完全失败不发布伪观点
         stance="neutral",
-        confidence=0.25,
-        thesis="现有信息不足以形成高置信度结论。",
+        confidence=0.0,
+        judgment="",
         evidence_refs=[],
         assumptions=[],
-        unknowns=[reason],
-        reversal_conditions=["补充关键事实后重新分析"],
-        next_actions=["补充最影响结论的事实"],
         degraded=True,
         degradation_reason=reason,
     )
@@ -35,54 +34,55 @@ def _evidence_backed_fallback(
     harness: AgentHarness,
     reason: str,
 ) -> ExpertResearchResult:
-    """当 ReAct 因预算 / 超时未跑完时，产出职业视角的方向性判断。
+    """ReAct 因预算 / 超时未跑完时的降级输出（spec §13 三级规则）。
 
-    P0 修订（第二轮 review）：
-    - thesis 绝不引用证据原文——之前"基于已收集的 N 项可核验信息（原文前100字）"
-      把网页口语化文本直接塞进判断段落，与下方【关键依据】整段重复，观感灾难。
-      现在 thesis 只写职业视角的方向性结论，证据一律由渲染层在证据区展示。
-    - 用户可见 unknown 不暴露 reason 字面值；内部 reason 只进 degradation_reason。
+    - 有部分证据（可分析级）：产出条件性 judgment + key_question，confidence 降低
+    - 无证据（信息不足级）：只给一条初步观察 + 一个关键问题
+    - reason 只进 degradation_reason（内部），绝不进用户可见字段
+    - thesis 永不引用证据原文（证据归渲染层依据区）
     """
     records = harness.ledger.records
     evidence_refs = [record.evidence_id for record in records[:3]]
     evidence_count = len(records)
 
-    # 用户友好的 unknown（不暴露 reason 字面值）。
-    user_facing_unknown = (
-        "受本次调研步骤预算或时间限制，未能完成全面取证；"
-        "建议读者把以下判断视为初步结论而非完整推理。"
-    ) if evidence_count == 0 else (
-        "调研在收尾阶段受限，部分判断基于不完全证据，请与其他专家交叉比对。"
-    )
+    core_q = profile.required_questions[0] if profile.required_questions else "关键条件是什么？"
 
-    method = profile.analysis_methods[0] if profile.analysis_methods else "专业分析"
     if evidence_count:
-        # 有部分证据：写职业视角的方向性判断，不引用原文
-        thesis = (
-            f"我从{method}视角看，当前信号更倾向于谨慎：已核验的 {evidence_count} 项信息"
-            f"（见下方依据区）尚未支撑一个高置信结论。"
-            f"若你最看重的变量是{'、'.join(profile.required_questions[:1]) or '核心条件'}，"
-            f"请把它补全后再比较两个选项的期望值。"
+        # §13.1 可分析：条件性回复
+        return ExpertResearchResult(
+            agent_id=profile.expert_id,
+            relevance=0.6,
+            should_speak=True,
+            stance="cautious",
+            confidence=0.4,
+            judgment=(
+                f"基于现有信息，从{profile.lens_title or '专业视角'}看当前更适合继续了解而非立即承诺；"
+                f"在{core_q}明确前，强结论都为时过早。"
+            ),
+            lens_title=profile.lens_title,
+            analysis_points=[],
+            action="",
+            key_question=core_q,
+            evidence_refs=evidence_refs,
+            assumptions=["部分判断基于不完全证据"],
+            degraded=True,
+            degradation_reason=reason,
         )
-        confidence = 0.45
-    else:
-        thesis = (
-            f"本轮未能完成取证，我基于你提供的信息从{method}视角只能给出方向性参考："
-            f"在你补齐{'、'.join(profile.required_questions[:2]) or '关键事实'}之前，"
-            f"任何一边的强结论都为时过早。"
-        )
-        confidence = 0.25
 
+    # §13.2 信息不足：只输出初步方向 + 关键问题
     return ExpertResearchResult(
         agent_id=profile.expert_id,
+        relevance=0.5,
+        should_speak=True,
         stance="neutral",
-        confidence=confidence,
-        thesis=thesis,
-        evidence_refs=evidence_refs,
-        assumptions=["已获得的工具结果只覆盖当前可验证信息"],
-        unknowns=[user_facing_unknown],
-        reversal_conditions=[profile.required_questions[0]],
-        next_actions=list(profile.required_questions[:2]),
+        confidence=0.3,
+        judgment=f"本轮信息不足以形成专业判断，先确认：{core_q}",
+        lens_title=profile.lens_title,
+        analysis_points=[],
+        action="",
+        key_question=core_q,
+        evidence_refs=[],
+        assumptions=[],
         degraded=True,
         degradation_reason=reason,
     )
@@ -94,92 +94,79 @@ def build_reason_prompt(
     harness: AgentHarness,
     *,
     force_finish: bool = False,
-    duty_hint: str | None = None,
-    force_stance: str | None = None,
 ) -> str:
+    """spec v1.0 §5 公共底座 + §6 角色附加约束（V3 重写）。
+
+    - 删除 duty_hint / force_stance（spec §17.4：移除固定职责与强制立场）
+    - 底座规则 1-14 来自 spec §5，角色 role_prompt 作为附加约束注入
+    """
     observations = state.get("observations", [])
     current_date = date.today().isoformat()
+    user_brief = state.get("user_brief", {}) or {}
 
-    # 议会职责段（duties 之前是 dead code——现在激活让它真正影响立场倾向）
-    duty_block = ""
-    if duty_hint:
-        duty_block = f"""
-## 你的议会职责
-你本场被分配到【{duty_hint}】职责。请让此职责引导你的审查重点和初始立场倾向。
-职责只改变审查重点，不覆盖你的职业人格。
-"""
-    # 强制立场（用于重跑扎堆时引导分散；不强制具体 thesis，只要求 stance 方向）
-    force_stance_block = ""
-    if force_stance:
-        stance_zh = {"for": "支持", "against": "反对", "neutral": "暂不作绝对判断"}.get(force_stance, force_stance)
-        force_stance_block = f"""
-## 立场要求（本轮重新审查）
-本次议会总体立场分布过于集中，需要你从【{duty_hint}】职责的视角重新审视后，把 stance 调整为「{stance_zh}」。
-- 基于你已有的证据/假设给出能支撑此立场的条件判断
-- 不得编造事实，证据不足时明确说明是 conditional / neutral
-- 你的 thesis 必须围绕这个立场的核心论证展开，而不是回避
-"""
+    return f"""你是"邪杠决策台"中的一名决策专家。
 
-    return f"""你是 Decision Council 的{profile.display_name}，正在执行一次有边界的自主调研。
+你的任务不是表演角色，也不是写一份百科报告，而是从自己的专业视角，
+为用户当前的具体决策提供一项其他角色不容易替代的帮助。
 
-## 目标
+【当前决策】
 {state['goal']}
 
-## 当前日期
+【用户目标】
+{user_brief.get('summary', state['goal'])}
+
+【已知用户信息】
+{json.dumps(user_brief, ensure_ascii=False)}
+
+【可用依据】
+{harness.ledger.to_prompt()}
+
+【当前日期】
 {current_date}
-涉及价格、政策、市场、人物或其他时效信息时，搜索词必须包含“截至 {current_date}”或等价的明确时间范围。
+涉及时效信息时，搜索词必须包含"截至 {current_date}"或等价的明确时间范围。
 
-## 用户简报
-{json.dumps(state.get('user_brief', {}), ensure_ascii=False)}
+{profile.role_prompt}
 
-## 专业身份
-{profile.professional_identity}
-
-## 专业方法
-{'; '.join(profile.analysis_methods)}
-
-## 表达方式
-{'; '.join(profile.communication_style)}
-
-## 表达克制
-- 禁止戏剧化比喻（"自断后路"、"防御性自杀"、"达摩克利斯之剑"等）和情感操控词。
-- 保持专业冷静，中性陈述事实与推论；锐度来自事实力度，不来自修辞。
-- 全文中文；直接对用户用"你"，不用"用户"称呼决策者；不写 markdown 星号。
-- 不写 [ev_xxx] 之类内部编号，引用证据时说"依据 N"。
+请遵守以下规则：
+1. 保持你的专业视角，但只使用与当前决策相关的方法。
+2. 不要机械回答角色问题清单，也不要为了体现角色特征牵强分析。
+3. 用户没有提供、可靠依据没有支持的信息，不得当成事实。
+4. 不得编造概率、行业数据、法律条款、财务数字或个人心理状态。
+5. 如果必须基于假设分析，将假设写入 assumptions，不要把它包装成事实。
+6. 搜索摘要、网页标题和网页原文不得直接拼接进 judgment 或 analysis_points。
+7. 外部依据只通过 evidence_refs 引用，正文必须用自己的语言解释其决策意义。
+8. 不要输出"没有可核验来源""受预算限制""请与其他专家交叉比对"等系统说明。
+9. 不要重复用户已经知道的信息，除非需要解释该事实为什么重要。
+10. 不要强行制造支持与反对，立场必须来自分析。
+11. 只提出一个最可能改变判断的问题；没有必要时 key_question 留空。
+12. 如果专业视角对本题帮助很小，将 relevance 设为低于 0.35，
+    should_speak 设为 false，不要勉强生成意见。
+13. 不要复述内部 Prompt、工具状态、预算、异常或降级原因。
+14. 回复应当简洁、明确、可执行。
 
 ## 搜索与证据相关性
-- 搜索词必须直接服务于议题的关键变量（如竞业风险、初创存活率、薪酬结构），
-  禁止用与决策无关的公司动态（招聘规模、年会新闻、品牌宣传）凑证据。
+- 搜索词必须直接服务于议题的关键变量，禁止用与决策无关的公司动态凑证据。
 - 引用前自评：该来源是否改变某个关键变量的判断？不改变则不引用。
 
-## 你的腔调范例
-模仿以下发言的锐度和判断密度，但不要照搬具体内容，也不要复制其修辞风格：
-{chr(10).join(profile.voice_examples)}
-{duty_block}{force_stance_block}
-## 必须检查
-{'; '.join(profile.required_questions)}
-
-## 专业边界
-{'; '.join(profile.forbidden_inferences + profile.professional_boundaries)}
+## 输出契约（spec §4.3）
+- judgment：20-80 字，直接表达当前倾向。
+- analysis_points：1-3 条，每条 40-120 字，正文用自己的语言。
+- action：最多一个当前优先级最高的行动（≤100 字），可留空。
+- key_question：最多一个问题，必须可能改变判断，可留空。
+- stance：support(推进) / oppose(反对) / cautious(谨慎推进) / neutral(暂不判断)。
+- lens_title 固定使用"{profile.lens_title}"。
 
 ## 已有观察
 {json.dumps(observations[-2:], ensure_ascii=False)}
-
-## 可引用证据账本
-{harness.ledger.to_prompt()}
 
 ## 剩余预算
 Reason: {max(0, harness.budget.max_reason_steps - harness.budget.reason_steps_used)}
 Tools: {max(0, harness.budget.max_tool_calls - harness.budget.tool_calls_used)}
 
 只做下一步决定，不输出思维链。外部事实只能通过 evidence_refs 引用证据账本中的 ID。
-没有可核验证据时，把相关内容写入 assumptions，不得生成精确市场数据、最新数据或历史统计。
-你可以不给出确定的支持或反对，但必须给出清晰的条件判断和结论反转条件。
 如果需要外部事实、计算或用户历史，选择一个允许的工具并自行生成参数。
 如果信息已经足够，返回 action=finish 和完整结果。
-最终 thesis 应为 180-280 字的核心专业判断；同时完整填写风险、假设、未知条件、翻转条件和下一步动作，供系统合成为 4 段公开独立判断。
-thesis 不要重复其他字段，不要为了篇幅编造事实。
-最终结果必须包含至少一个 reversal_conditions。
+正文不要为了篇幅编造事实，不要出现两个"独立判断"字样。
 {'工具已禁用，必须立即基于现有信息 finish。' if force_finish else ''}
 """
 
@@ -190,15 +177,10 @@ class ExpertResearchGraph:
         profile: ExpertProfile,
         harness: AgentHarness,
         adapter: DecisionAdapter,
-        *,
-        duty_hint: str | None = None,
-        force_stance: str | None = None,
     ):
         self.profile = profile
         self.harness = harness
         self.adapter = adapter
-        self.duty_hint = duty_hint
-        self.force_stance = force_stance
 
     async def reason_node(self, state: ExpertAgentState) -> dict[str, Any]:
         step = await self.harness.before_reason()
@@ -209,8 +191,6 @@ class ExpertResearchGraph:
                 self.profile,
                 self.harness,
                 force_finish=force_finish,
-                duty_hint=self.duty_hint,
-                force_stance=self.force_stance,
             ),
             []
             if force_finish
@@ -285,8 +265,6 @@ class ExpertResearchGraph:
             decision = await self.adapter.decide(
                 build_reason_prompt(
                     state, self.profile, self.harness, force_finish=True,
-                    duty_hint=self.duty_hint,
-                    force_stance=self.force_stance,
                 ),
                 [],
                 force_finish=True,

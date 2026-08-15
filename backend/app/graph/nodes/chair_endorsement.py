@@ -75,9 +75,8 @@ async def _one_endorsement(
     if not profile:
         return None
 
-    duties = state.get("debate_duties", {}) or {}
-    from app.agents.profiles import DUTY_LABELS
-    duty_label = DUTY_LABELS.get(duties.get(expert_id, ""), profile.professional_identity)
+    # V3：duty 标签删除——用角色核心职责替代
+    duty_label = profile.professional_identity
 
     prompt = ENDORSE_PROMPT.format(
         expert_name=profile.display_name,

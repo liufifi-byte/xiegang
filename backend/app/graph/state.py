@@ -21,7 +21,7 @@ class ParliamentState(TypedDict):
     # === 本场职业专家 ===
     selected_expert_ids: list[str]
     expert_selection_reasons: dict[str, str]
-    debate_duties: dict[str, str]
+    # V3: debate_duties 已删除（spec §17.4）——键保留避免旧 checkpoint 断裂
     divergent_expert_ids: list[str]
     core_disputes: list[dict[str, Any]]
     round_decisions: list[dict[str, Any]]

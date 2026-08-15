@@ -52,8 +52,11 @@ _MISNAME_MAP = {
     "政客": "政治家",
 }
 
-# 英文 stance → 中文
+# 英文 stance → 中文（V3 新枚举 + 旧枚举兼容）
 _STANCE_MAP = {
+    "support": "建议推进",
+    "oppose": "不建议",
+    "cautious": "谨慎推进",
     "against": "反对",
     "for": "支持",
     "neutral": "中立",
@@ -340,3 +343,64 @@ def compute_basis_level(evidence_count: int, degraded: bool = False) -> str:
 
 def basis_label_zh(level: str) -> str:
     return _BASIS_LABEL_ZH.get(level, "判断基础有限")
+
+
+# ============================================================
+# 4. 确定性质量检查（spec §12.1 规则版——不增加模型调用）
+# ============================================================
+
+# 系统状态词（正文出现即违规）
+_SYSTEM_LEAK_MARKERS = (
+    "预算", "超时", "工具错误", "降级", "受本次调研", "步骤预算",
+    "时间上限", "请与其他专家交叉比对", "可核验来源",
+    "独立判断",  # spec §12.1: 不得出现两个"独立判断"
+)
+
+
+def quality_gate_issues(
+    judgment: str = "",
+    analysis_points: list[str] | None = None,
+    action: str = "",
+    key_question: str = "",
+    evidence_text_sample: str = "",
+    lens_title: str = "",
+    expected_lens: str = "",
+) -> list[str]:
+    """spec §12.1 确定性规则检查。返回问题列表（空 = 通过）。
+
+    检查项：
+    1. 正文出现系统状态词（预算/超时/降级/独立判断等）
+    2. 字数与条数越限（judgment ≤200，analysis ≤3 条，question 只一个问号）
+    3. lens_title 与角色配置不一致
+    4. 正文包含证据摘要长串（≥30 字连续相同视为泄漏）
+    5. key_question 出现多个问号
+    """
+    issues: list[str] = []
+    full_text = " ".join(
+        filter(None, [judgment, *(analysis_points or []), action, key_question])
+    )
+
+    # 1. 系统词
+    for marker in _SYSTEM_LEAK_MARKERS:
+        if marker in full_text:
+            issues.append(f"正文含系统词「{marker}」")
+
+    # 2. 条数
+    if analysis_points and len(analysis_points) > 3:
+        issues.append(f"analysis_points {len(analysis_points)} 条 > 3")
+
+    # 3. lens 一致性
+    if expected_lens and lens_title and lens_title != expected_lens:
+        issues.append(f"lens_title「{lens_title}」≠ 角色「{expected_lens}」")
+
+    # 4. 证据原文泄漏（≥30 字连续子串出现在正文）
+    if evidence_text_sample and len(evidence_text_sample) >= 30:
+        probe = evidence_text_sample[:30]
+        if probe in full_text:
+            issues.append("正文包含证据原文长串（≥30 字）")
+
+    # 5. key_question 多问号
+    if key_question.count("？") + key_question.count("?") > 1:
+        issues.append("key_question 包含多个问号")
+
+    return issues

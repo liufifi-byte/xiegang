@@ -82,7 +82,7 @@ def test_parallel_research_handles_member_error(monkeypatch):
         if mid == "suan":
             raise RuntimeError("simulated LLM error")
         stmt = MemberStatement(
-            member_id=mid, stance="for", confidence=0.7,
+            member_id=mid, stance="cautious", confidence=0.7,
             evidence=[Evidence(claim="x", source="y", strength="high")],
             reasoning_summary=f"{mid} ok",
         )
@@ -100,7 +100,7 @@ def test_parallel_research_handles_member_error(monkeypatch):
     assert result["members"]["suan"]["stance"] == "neutral"
     assert result["members"]["suan"]["confidence"] == 0.0
     # 其他议员正常
-    assert result["members"]["chen"]["stance"] == "for"
+    assert result["members"]["chen"]["stance"] == "cautious"
 
 
 def test_parallel_research_preserves_existing_transcript(monkeypatch):
@@ -142,15 +142,16 @@ def test_semaphore_can_be_created():
 def test_public_research_statement_combines_structured_analysis():
     result = ExpertResearchResult(
         agent_id="economist",
-        stance="against",
+        stance="oppose",
         confidence=0.7,
-        thesis="当前投入占可用资金比例过高，机会成本不可忽略。",
-        key_risks=["需要用钱时被迫退出"],
+        judgment="当前投入占可用资金比例过高，建议暂缓。",
+        lens_title="成本与回报",
+        analysis_points=["需要用钱时可能被迫退出。"],
         evidence_refs=["ev_1"],
         assumptions=["未来一年收入保持稳定"],
-        unknowns=["是否另有应急储备"],
-        reversal_conditions=["投入比例明显下降"],
-        next_actions=["列出未来十二个月的大额支出"],
+        action="列出未来十二个月的大额支出。",
+        key_question="是否另有应急储备？",
+        reversal_condition="投入比例明显下降。",
     )
     content = _render_public_research_statement(
         result,
@@ -164,45 +165,33 @@ def test_public_research_statement_combines_structured_analysis():
         ],
     )
 
-    for heading in (
-        "【我的判断",          # P3 后带视角后缀：【我的判断 · 机会成本】
-        "【关键依据】",
-        "【主要风险】",
-        "【什么时候我会改变判断】",
-    ):
+    # V3 spec §4.1 四段契约
+    for heading in ("【当前判断", "【成本与回报】", "【建议行动】", "【关键问题】"):
         assert heading in content
-    # 视角签名必须在（解决"看不出是哪个职业在说话"）
-    assert " · " in content.split("】")[0]
-    # 4 段压缩后不再出现的旧标题（验证确实合并了）
-    assert "【我最担心的地方】" not in content
-    assert "【当前假设与未知】" not in content
-    assert "【你下一步应该做什么】" not in content
-    assert "用户计划投入一半可用资金" in content
-    assert "是否另有应急储备" in content
-    # assumptions 被并入 evidence 段
-    assert "核心假设" in content
+    assert "暂缓" in content  # judgment 在
 
 
 def test_parallel_research_runs_selected_expert_agents(monkeypatch):
     """Selected professional IDs switch the node to the ReAct agent path."""
     from app.graph.nodes import parallel_research as pr_module
 
-    async def fake_run(expert_id, state, registry, checkpointer=None,
-                        duty_hint=None, force_stance=None):
+    async def fake_run(expert_id, state, registry, checkpointer=None):
         return {
             "ok": True,
             "expert_id": expert_id,
             "state": {
                 "final_result": {
                     "agent_id": expert_id,
-                    "stance": "for",
+                    "stance": "cautious",
                     "confidence": 0.7,
-                    "thesis": f"{expert_id} conclusion",
+                    "judgment": f"{expert_id} 初步判断：条件未定，谨慎推进。",
+                    "lens_title": "",
+                    "analysis_points": [],
+                    "action": "",
+                    "key_question": "",
+                    "reversal_condition": "",
                     "evidence_refs": [],
                     "assumptions": [],
-                    "unknowns": [],
-                    "reversal_conditions": ["条件改变"],
-                    "next_actions": [],
                     "tool_calls_used": 0,
                     "degraded": False,
                     "degradation_reason": None,
@@ -240,8 +229,7 @@ def test_parallel_research_runs_selected_expert_agents(monkeypatch):
 def test_parallel_agent_research_isolates_single_failure(monkeypatch):
     from app.graph.nodes import parallel_research as pr_module
 
-    async def fake_run(expert_id, state, registry, checkpointer=None,
-                        duty_hint=None, force_stance=None):
+    async def fake_run(expert_id, state, registry, checkpointer=None):
         if expert_id == "artist":
             return {"ok": False, "expert_id": expert_id, "error": "timeout"}
         return {
@@ -252,12 +240,14 @@ def test_parallel_agent_research_isolates_single_failure(monkeypatch):
                     "agent_id": expert_id,
                     "stance": "neutral",
                     "confidence": 0.5,
-                    "thesis": "ok",
+                    "judgment": "初步判断：信息不足，暂不表态。",
+                    "lens_title": "",
+                    "analysis_points": [],
+                    "action": "",
+                    "key_question": "新信息是什么？",
+                    "reversal_condition": "",
                     "evidence_refs": [],
                     "assumptions": [],
-                    "unknowns": [],
-                    "reversal_conditions": ["新信息"],
-                    "next_actions": [],
                     "tool_calls_used": 0,
                     "degraded": False,
                     "degradation_reason": None,

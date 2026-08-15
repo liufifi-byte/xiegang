@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.agents.profiles import DUTY_LABELS
+# V3：duties 系统已删除（spec §17.4）
 from app.graph.nodes.round_debate import run_debate_round
 
 
@@ -38,20 +38,15 @@ def extract_core_disputes(state: dict) -> dict:
     has_real_disagreement = len(
         [stance for stance, ids in stances.items() if ids]
     ) > 1
-    duties = state.get("debate_duties", {})
     participants: list[str] = []
     if has_real_disagreement:
         for ids in stances.values():
             if ids:
                 participants.append(ids[0])
     else:
+        # V3：无真实分歧时优先请逆向思考者检查问题定义（原 contrarian_challenge 职责）
         challenger = next(
-            (
-                expert_id
-                for expert_id, duty in duties.items()
-                if duty == "contrarian_challenge"
-            ),
-            None,
+            (eid for eid in selected if eid == "contrarian"), None
         )
         if challenger:
             participants.append(challenger)
@@ -167,7 +162,9 @@ async def run_convergence_round(state: dict) -> dict:
 
 
 def public_duty_label(state: dict, expert_id: str) -> str:
-    return DUTY_LABELS.get(
-        state.get("debate_duties", {}).get(expert_id, ""),
-        "专业质询",
-    )
+    # V3：duty 标签删除——返回角色 lens（专属分析栏目）或空
+    from app.agents.profiles import get_expert_profile
+    try:
+        return get_expert_profile(expert_id).lens_title
+    except ValueError:
+        return ""

@@ -12,12 +12,12 @@ from app.agents.trace import AgentTraceSink
 def finish_result(evidence_refs=None):
     return ExpertResearchResult(
         agent_id="economist",
-        stance="for",
+        stance="cautious",
         confidence=0.75,
-        thesis="机会成本可控",
+        judgment="机会成本可控，谨慎推进。",
         evidence_refs=evidence_refs or [],
-        reversal_conditions=["现金流恶化"],
-        next_actions=["核实条款"],
+        reversal_condition="现金流恶化。",
+        action="核实条款。",
     )
 
 
@@ -63,7 +63,7 @@ async def test_graph_can_finish_without_tools():
     state = await runner(
         SequenceAdapter([AgentDecision(action="finish", result=finish_result())])
     ).run(goal="是否接 Offer", user_brief={"background": "信息充分"})
-    assert state["final_result"]["stance"] == "for"
+    assert state["final_result"]["stance"] == "cautious"
     assert state["metrics"]["tool_calls"] == 0
     phases = [event["phase"] for event in state["trace_events"]]
     assert phases == ["started", "deciding", "finalizing", "completed"]

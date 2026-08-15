@@ -104,19 +104,32 @@ class EvidenceRecord(BaseModel):
         return self
 
 
+Stance = Literal["support", "oppose", "cautious", "neutral"]
+
+
 class ExpertResearchResult(BaseModel):
+    """专家公开回复契约（spec v1.0 §4.3）。
+
+    stance: support(推进)/oppose(反对)/cautious(谨慎推进)/neutral(暂不判断)
+    judgment: 20-80 字当前倾向
+    analysis_points: 1-3 条角色视角分析，每条 40-120 字
+    action: 最多一个当前优先行动（可空）
+    key_question: 最多一个可能改变判断的问题（可空）
+    relevance/should_speak: 相关性低于 0.35 时本角色不发言
+    """
     agent_id: str
-    stance: Literal["for", "against", "neutral"]
+    relevance: float = Field(default=0.7, ge=0.0, le=1.0)
+    should_speak: bool = True
+    stance: Stance
     confidence: float = Field(ge=0.0, le=1.0)
-    position: DecisionPosition = "undetermined"
-    basis_level: BasisLevel = "limited"
-    thesis: str = Field(min_length=1)
-    key_risks: list[str] = Field(default_factory=list, max_length=5)
+    judgment: str = Field(min_length=1, max_length=200)
+    lens_title: str = ""
+    analysis_points: list[str] = Field(default_factory=list, max_length=3)
+    action: str = Field(default="", max_length=300)
+    key_question: str = Field(default="", max_length=200)
+    reversal_condition: str = Field(default="", max_length=300)
     evidence_refs: list[str] = Field(default_factory=list, max_length=3)
     assumptions: list[str] = Field(default_factory=list, max_length=5)
-    unknowns: list[str] = Field(default_factory=list, max_length=5)
-    reversal_conditions: list[str] = Field(min_length=1, max_length=5)
-    next_actions: list[str] = Field(default_factory=list, max_length=5)
     tool_calls_used: int = Field(default=0, ge=0)
     degraded: bool = False
     degradation_reason: str | None = None
@@ -125,6 +138,18 @@ class ExpertResearchResult(BaseModel):
     def degraded_result_has_reason(self) -> "ExpertResearchResult":
         if self.degraded and not self.degradation_reason:
             raise ValueError("degraded result must include degradation_reason")
+        return self
+
+    @model_validator(mode="after")
+    def silent_result_is_empty(self) -> "ExpertResearchResult":
+        """spec §10.1：should_speak=false 时不得生成伪观点。"""
+        if not self.should_speak:
+            if self.judgment.strip():
+                # spec §10.1: silent 时 judgment 只允许极短内部标记（≤20 字）
+                if len(self.judgment) > 20 or len(self.analysis_points) > 0:
+                    raise ValueError(
+                        "should_speak=false 时不得生成观点（judgment≤20字且无 analysis_points）"
+                    )
         return self
 
 

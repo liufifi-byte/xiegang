@@ -4,7 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-Stance = Literal["for", "against", "neutral"]
+Stance = Literal["support", "oppose", "cautious", "neutral"]
 EvidenceStrength = Literal["high", "medium", "low"]
 
 
@@ -15,7 +15,7 @@ class Evidence(BaseModel):
 
 
 class MemberStatement(BaseModel):
-    """单一议员一轮发言的结构化输出。"""
+    """单一议员一轮发言的结构化输出（V3 对齐 spec §4.3 契约）。"""
     member_id: str
     stance: Stance
     confidence: float = Field(ge=0.0, le=1.0)

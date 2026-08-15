@@ -13,14 +13,16 @@ from app.agents.schemas import (
 def _result(**overrides):
     data = {
         "agent_id": "economist",
-        "stance": "for",
+        "stance": "cautious",
         "confidence": 0.7,
-        "thesis": "机会成本可控",
+        "judgment": "机会成本可控，建议谨慎推进",
+        "lens_title": "成本与回报",
+        "analysis_points": [],
+        "action": "",
+        "key_question": "",
+        "reversal_condition": "",
         "evidence_refs": [],
         "assumptions": [],
-        "unknowns": [],
-        "reversal_conditions": ["现金流下降"],
-        "next_actions": ["核实期权条款"],
     }
     data.update(overrides)
     return ExpertResearchResult(**data)
@@ -76,9 +78,11 @@ def test_research_result_validates_confidence_and_degradation_reason():
     assert degraded.degraded is True
 
 
-def test_research_result_requires_reversal_condition():
-    with pytest.raises(ValidationError):
-        _result(reversal_conditions=[])
+def test_research_result_allows_empty_optional_fields():
+    """V3：action/key_question/reversal_condition 全部可空（spec：不强行凑满）。"""
+    result = _result(action="", key_question="", reversal_condition="")
+    assert result.action == ""
+    assert result.key_question == ""
 
 
 def test_trace_event_is_json_serializable():

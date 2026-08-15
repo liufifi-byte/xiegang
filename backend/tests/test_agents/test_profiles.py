@@ -8,8 +8,10 @@ EXPECTED_IDS = {
     "economist",
     "psychologist",
     "historian",
-    "artist",
-    "politician",
+    "strategist",
+    "legal_scholar",
+    "sociologist",
+    "contrarian",
 }
 
 
@@ -33,12 +35,12 @@ def test_professional_methods_match_identity():
     assert "calculator" in EXPERT_PROFILES["mathematician"].allowed_tools
     assert "calculator" in EXPERT_PROFILES["economist"].allowed_tools
     assert "calculator" not in EXPERT_PROFILES["psychologist"].allowed_tools
-    assert "calculator" not in EXPERT_PROFILES["artist"].allowed_tools
-    assert "价值澄清" in EXPERT_PROFILES["psychologist"].analysis_methods
-    assert "问题重构" in EXPERT_PROFILES["artist"].analysis_methods
+    assert "calculator" not in EXPERT_PROFILES["contrarian"].allowed_tools
+    assert "价值观冲突" in EXPERT_PROFILES["psychologist"].analysis_methods
+    assert "挑战二选一" in EXPERT_PROFILES["contrarian"].analysis_methods
     assert any(
-        "所有关系" in boundary
-        for boundary in EXPERT_PROFILES["politician"].professional_boundaries
+        "权力斗争" in boundary
+        for boundary in EXPERT_PROFILES["strategist"].forbidden_inferences
     )
 
 

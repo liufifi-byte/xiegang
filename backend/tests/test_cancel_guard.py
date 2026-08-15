@@ -112,7 +112,7 @@ def test_structured_wrapper_ainvoke_uses_native(monkeypatch):
     class MockStructured:
         async def ainvoke(self, prompt, **kwargs):
             return MemberStatement(
-                member_id="x", stance="for", confidence=0.8,
+                member_id="x", stance="cautious", confidence=0.8,
                 evidence=[], reasoning_summary="原生异步路径",
             )
         def invoke(self, prompt, **kwargs):
@@ -142,7 +142,7 @@ def test_structured_wrapper_ainvoke_fallback_on_structured_failure(monkeypatch):
     from app.schemas.member import MemberStatement
 
     valid_json = json.dumps({
-        "member_id": "suan", "stance": "against", "confidence": 0.7,
+        "member_id": "suan", "stance": "oppose", "confidence": 0.7,
         "evidence": [], "reasoning_summary": "fallback 路径",
     })
 
@@ -168,4 +168,4 @@ def test_structured_wrapper_ainvoke_fallback_on_structured_failure(monkeypatch):
 
     result = asyncio.run(runner())
     assert result.reasoning_summary == "fallback 路径"
-    assert result.stance == "against"
+    assert result.stance == "oppose"

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-STANCE_ORDER = ("for", "against", "neutral")
+STANCE_ORDER = ("support", "oppose", "neutral")
 
 
 def _quality(member: dict) -> float:

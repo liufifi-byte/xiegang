@@ -13,8 +13,8 @@ def result():
         agent_id="economist",
         stance="neutral",
         confidence=0.5,
-        thesis="信息有限",
-        reversal_conditions=["补充信息"],
+        judgment="信息有限，暂缓判断。",
+        reversal_condition="补充信息后重评。",
     )
 
 
@@ -111,6 +111,6 @@ async def test_native_force_finish_uses_required_submit_tool(monkeypatch):
         "prompt", [], force_finish=True
     )
     assert decision.action == "finish"
-    assert decision.result.thesis == "信息有限"
+    assert decision.result.judgment.startswith("信息有限")
     assert captured["kwargs"]["tool_choice"] == "submit_expert_result"
     assert captured["tools"][0]["function"]["name"] == "submit_expert_result"

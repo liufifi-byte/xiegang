@@ -330,8 +330,6 @@ async def _run_one_expert_safe(
     state: dict,
     registry: ToolRegistry,
     checkpointer=None,
-    duty_hint: str | None = None,
-    force_stance: str | None = None,
 ) -> dict:
     """Run one professional agent without allowing a single failure to fan out."""
     settings = get_settings()
@@ -367,8 +365,6 @@ async def _run_one_expert_safe(
         category=state.get("category") or "general",
         sensitive_values=state.get("briefing", {}).get("sensitive_values", []),
         cancel_check=cancel_check,
-        duty_hint=duty_hint,
-        force_stance=force_stance,
     )
     user_brief = {
         "summary": state.get("briefing", {}).get("summary", state["topic"]),
@@ -391,12 +387,11 @@ async def _run_one_expert_safe(
         _final = result_state.get("final_result") or {}
         _ev = len(result_state.get("evidence_ledger", []))
         _eph = len(result_state.get("safe_action_history", []))
-        _hint = f" duty={duty_hint}" if duty_hint else ""
-        _force = f" force={force_stance}" if force_stance else ""
+        _speak = f" speak={_final.get('should_speak')}" if _final.get("should_speak") is False else ""
         print(
             f"[agent] OK       parliament={parliament_id} expert={expert_id} "
             f"dur={_dur:.1f}s stance={_final.get('stance')} "
-            f"conf={_final.get('confidence')} evidence={_ev} tool_calls={_eph}{_hint}{_force}",
+            f"conf={_final.get('confidence')} evidence={_ev} tool_calls={_eph}{_speak}",
             flush=True,
         )
         return {"ok": True, "expert_id": expert_id, "state": result_state}
@@ -486,8 +481,8 @@ def _agent_result_to_member(
             }
         )
 
-    # P0: 判断基础标签不再让 LLM 自评——按证据条数 + degraded 规则计算，
-    # 修复"1 条证据标较强 / fallback 标一般"的倒挂。
+    # P0: 判断基础标签按证据条数 + degraded 规则计算（内部质量信号，
+    # Batch 2 前端不再显示，但 summary/archive 仍读）。
     from app.graph.nodes.text_sanitizer import compute_basis_level
     rule_basis = compute_basis_level(len(evidence), result.degraded)
 
@@ -495,15 +490,17 @@ def _agent_result_to_member(
         "member_id": expert_id,
         "stance": result.stance,
         "confidence": result.confidence,
-        "position": result.position,
+        "relevance": result.relevance,
+        "should_speak": result.should_speak,
+        "lens_title": result.lens_title,
         "basis_level": rule_basis,
         "evidence": evidence,
-        "reasoning_summary": result.thesis,
-        "key_risks": result.key_risks,
+        "reasoning_summary": result.judgment,
+        "analysis_points": list(result.analysis_points),
+        "action": result.action,
+        "key_question": result.key_question,
+        "reversal_condition": result.reversal_condition,
         "assumptions": result.assumptions,
-        "unknowns": result.unknowns,
-        "reversal_conditions": result.reversal_conditions,
-        "next_actions": result.next_actions,
         "degraded": result.degraded,
         "degradation_reason": result.degradation_reason,
     }
@@ -518,73 +515,56 @@ def _render_public_research_statement(
     result: ExpertResearchResult,
     evidence_records: list[dict],
 ) -> str:
-    """Turn the structured Agent result into one complete public statement."""
+    """spec v1.0 §4.1 四段公开回复契约（V3 重写）。
+
+    【当前判断】judgment（20-80 字）
+    【{lens_title}】analysis_points（1-3 条要点）
+    【建议行动】action（可空则整段省略）
+    【关键问题】key_question（可空则整段省略）
+
+    - 正文零证据引用、零系统词（sanitizer 兜底）
+    - degraded 且无实质内容时返回空串（调用方不发布）
+    - 证据只在可展开依据区显示（前端渲染，这里不拼正文）
+    """
+    from app.graph.nodes.text_sanitizer import clean_visible_text as _clean
+
+    # spec §13.3 / §4.4：should_speak=false 一律不发布（低相关或完全失败）
+    if getattr(result, "should_speak", True) is False:
+        return ""
+
     stance_label = {
+        "support": "建议推进",
+        "oppose": "不建议",
+        "cautious": "谨慎推进",
+        "neutral": "暂不判断",
+        # 旧枚举兼容（历史数据重放）
         "for": "支持",
         "against": "反对",
-        "neutral": "暂不作绝对判断",
-    }[result.stance]
-    evidence_by_id = {
-        record.get("evidence_id"): record for record in evidence_records
-    }
-    # P0 渲染改造：证据走 sanitizer 的编号列表 + 摘要 + 域名 + 信源分级
-    from app.graph.nodes.text_sanitizer import (
-        clean_visible_text as _clean,
-        format_evidence_list as _fmt_evidence,
-    )
-    visible_records = [
-        evidence_by_id[ref]
-        for ref in result.evidence_refs
-        if ref in evidence_by_id
-    ]
-    evidence_lines = _fmt_evidence(visible_records)
+    }.get(result.stance, "暂不判断")
 
-    # P2: 0 证据时不再写免责声明句（用户体感差、零信息量）——直接给假设。
-    # P3: 证据区标题带职业视角签名（解决"看不出为什么这是政治家说的"）。
-    from app.agents.profiles import get_expert_profile as _get_profile
-    try:
-        _profile = _get_profile(result.agent_id)
-    except Exception:
-        _profile = None
-    perspective = (
-        _profile.analysis_methods[0] if _profile and _profile.analysis_methods else "专业分析"
-    )
+    judgment = _clean(result.judgment.strip())
+    if not judgment:
+        return ""
 
-    if evidence_lines:
-        evidence_text = "\n".join(evidence_lines)
-    else:
-        evidence_text = ""
-    unknowns = [
-        u for u in result.unknowns if u and "预算" not in u and "上限" not in u
-    ]
+    sections = [f"【当前判断 · {stance_label}】{judgment}"]
 
-    if result.assumptions:
-        assumption_text = f"\n核心假设：{_clean(_format_list(result.assumptions, ''))}"
-        evidence_text = (evidence_text + "\n" if evidence_text else "") + assumption_text.lstrip("\n")
+    lens = (result.lens_title or "").strip()
+    points = [_clean(p) for p in result.analysis_points if p and p.strip()]
+    if points:
+        body = "\n".join(f"· {p}" for p in points)
+        sections.append(f"【{lens or '专业分析'}】\n{body}" if len(points) > 1
+                        else f"【{lens or '专业分析'}】{body.removeprefix('· ')}")
 
-    risk_pieces = [_clean(r) for r in result.key_risks if r]
-    if unknowns:
-        risk_pieces.append("仍需确认：" + _clean(_format_list(unknowns, "")))
-    if result.degraded:
-        risk_pieces.append("本轮分析受限，结论请与其他专家交叉比对")
+    action = _clean(result.action or "").strip()
+    if action:
+        sections.append(f"【建议行动】{action}")
 
-    thesis_text = _clean(result.thesis.strip())
+    question = _clean(result.key_question or "").strip()
+    if question:
+        sections.append(f"【关键问题】{question}")
 
-    # 反转条件若只是 profile 预置的模板占位问题（fallback 未定制），整段省略——
-    # 渲染"题目是否被错误地限制成二选一？"这种句子对用户零价值。
-    reversal_items = [
-        c for c in result.reversal_conditions
-        if c and c.strip() and "?" not in c and "？" not in c
-    ] if result.degraded else [c for c in result.reversal_conditions if c and c.strip()]
+    return "\n\n".join(sections)
 
-    sections = [
-        f"【我的判断 · {perspective}】{stance_label}。{thesis_text}",
-        f"【关键依据】{evidence_text}" if evidence_text else "",
-        f"【主要风险】{_format_list(risk_pieces, '关键下行风险仍需结合用户实际承受能力确认')}",
-        f"【什么时候我会改变判断】{_clean(_format_list(reversal_items, '关键条件发生实质变化时重新评估'))}"
-        if reversal_items else "",
-    ]
-    return "\n\n".join(s for s in sections if s)
 
 
 async def _parallel_agent_research(state: dict) -> dict:
@@ -608,17 +588,10 @@ async def _parallel_agent_research(state: dict) -> dict:
     research_entries: list[dict] = []
     successes = 0
 
-    # 计算议会职责（之前是 dead code——现在通过 duty_hint 注入到 prompt）
-    from app.agents.profiles import assign_parliament_duties, DUTY_STANCE_HINT
-    duties = assign_parliament_duties(selected, state.get("category"))
-    print(f"[research] duties={duties}", flush=True)
-
+    # V3（spec §17.4）：删除 duties 与强制立场——多样性来自真实相关性。
     tasks = [
         asyncio.create_task(
-            _run_one_expert_safe(
-                expert_id, state, registry, checkpointer,
-                duty_hint=DUTY_STANCE_HINT.get(duties.get(expert_id, "")),
-            )
+            _run_one_expert_safe(expert_id, state, registry, checkpointer)
         )
         for expert_id in selected
     ]
@@ -667,15 +640,18 @@ async def _parallel_agent_research(state: dict) -> dict:
                 "member_id": expert_id,
                 "stance": "neutral",
                 "confidence": 0.0,
-                "position": "undetermined",
+                "relevance": 0.0,
+                # spec §13.3：执行失败 → 本轮不发布，不计票数
+                "should_speak": False,
+                "lens_title": "",
                 "basis_level": "limited",
                 "evidence": [],
                 "reasoning_summary": degraded_text,
-                "key_risks": [],
+                "analysis_points": [],
+                "action": "",
+                "key_question": "",
+                "reversal_condition": "",
                 "assumptions": [],
-                "unknowns": [error],
-                "reversal_conditions": ["重新完成专家调研"],
-                "next_actions": [],
                 "degraded": True,
                 "degradation_reason": error,
             }
@@ -683,20 +659,28 @@ async def _parallel_agent_research(state: dict) -> dict:
             agent_results[expert_id] = {"result": member, "evidence": [], "metrics": {}}
             trace_events.extend(outcome.get("trace_events", []))
 
-        research_entries.append(
-            {
-                "speaker": expert_id,
-                "round": 0,
-                "type": "research",
-                "stance": member["stance"],
-                "content": member["reasoning_summary"],
-                "evidence": member["evidence"],
-                "confidence": member["confidence"],
-                "position": member.get("position"),
-                "basis_level": member.get("basis_level", "limited"),
-                "degraded": member.get("degraded", False),
-            }
-        )
+        # spec §4.4/§13.3：should_speak=false（低相关或完全失败）不发布 transcript 条目
+        if member.get("should_speak", True) is False:
+            print(
+                f"[research] SKIP-PUBLISH {expert_id} should_speak=false "
+                f"（低相关或完全失败，不发布伪观点）",
+                flush=True,
+            )
+        else:
+            research_entries.append(
+                {
+                    "speaker": expert_id,
+                    "round": 0,
+                    "type": "research",
+                    "stance": member["stance"],
+                    "content": member["reasoning_summary"],
+                    "evidence": member["evidence"],
+                    "confidence": member["confidence"],
+                    "lens_title": member.get("lens_title", ""),
+                    "degraded": member.get("degraded", False),
+                    "silent": False,
+                }
+            )
         # Persist and publish each result immediately. The graph node can keep
         # waiting for slower experts without hiding completed work from users.
         parliament_id = state.get("parliament_id")
@@ -721,6 +705,11 @@ async def _parallel_agent_research(state: dict) -> dict:
                         .execute()
                     )
                 )
+                latest_entry = (
+                    research_entries[-1]
+                    if research_entries and research_entries[-1].get("speaker") == expert_id
+                    else None
+                )
                 await asyncio.to_thread(
                     append_event,
                     parliament_id,
@@ -728,7 +717,7 @@ async def _parallel_agent_research(state: dict) -> dict:
                     {
                         "expert_id": expert_id,
                         "member": member,
-                        "entry": research_entries[-1],
+                        "entry": latest_entry,
                         "completed_count": len(members),
                         "total_count": len(selected),
                     },
@@ -739,75 +728,6 @@ async def _parallel_agent_research(state: dict) -> dict:
                 pass
 
     insufficient = successes < 3
-
-    # ============ 立场分布检测 + 重跑（避免 4/5 扎堆同立场）===========
-    # duties 已分配但只靠 prompt hint 引导。如果 5 人最终仍扎堆到 ≥4 同立场，
-    # 找出"职责与扎堆立场冲突"的专家，强制 force_stance 重跑一次。
-    # 这里的 trade-off：重跑成本 = 单 Agent 60-90s。只在最坏情况下做。
-    if len(members) >= 4:
-        from collections import Counter
-        stance_counts = Counter(
-            m["stance"] for m in members.values() if m.get("stance")
-        )
-        dominant_stance, dominant_count = stance_counts.most_common(1)[0]
-
-        if dominant_count >= 4:
-            from app.agents.profiles import DUTY_DESIRED_STANCE
-            # 找 duty desires != dominant_stance 的、且目前是 dominant 的专家
-            candidates = [
-                (eid, duties.get(eid))
-                for eid in list(members.keys())
-                if members[eid].get("stance") == dominant_stance
-                and duties.get(eid)
-                and DUTY_DESIRED_STANCE.get(duties[eid]) != dominant_stance
-            ]
-            rebalanced = 0
-            for eid, duty in candidates[:2]:  # 最多重跑 2 个
-                target_stance = DUTY_DESIRED_STANCE[duty]
-                print(
-                    f"[research] REBALANCE {eid}: {dominant_stance} 扎堆，"
-                    f"duty={duty} 期望 {target_stance}，强制重跑",
-                    flush=True,
-                )
-                rebal_outcome = await _run_one_expert_safe(
-                    eid, state, registry, checkpointer,
-                    duty_hint=DUTY_STANCE_HINT.get(duty),
-                    force_stance=target_stance,
-                )
-                if rebal_outcome["ok"]:
-                    r_state = rebal_outcome["state"]
-                    r_result = ExpertResearchResult.model_validate(
-                        r_state["final_result"]
-                    )
-                    if r_result.stance != dominant_stance:
-                        new_ev = r_state.get("evidence_ledger", [])
-                        new_member = _agent_result_to_member(eid, r_result, new_ev)
-                        new_member["reasoning_summary"] = (
-                            _render_public_research_statement(r_result, new_ev)
-                        )
-                        members[eid] = new_member
-                        agent_results[eid] = {
-                            "result": r_result.model_dump(mode="json"),
-                            "evidence": new_ev,
-                            "metrics": r_state.get("metrics", {}),
-                        }
-                        rebalanced += 1
-                        # 同步 research_entries 中该专家的条目
-                        for entry in research_entries:
-                            if entry.get("speaker") == eid:
-                                entry["stance"] = new_member["stance"]
-                                entry["confidence"] = new_member["confidence"]
-                                entry["content"] = new_member["reasoning_summary"]
-                                entry["evidence"] = new_member["evidence"]
-                                entry["position"] = new_member.get("position")
-                                entry["basis_level"] = new_member.get("basis_level", "limited")
-                                entry["degraded"] = new_member.get("degraded", False)
-                                break
-            if rebalanced:
-                print(
-                    f"[research] rebalance 完成，{rebalanced} 位专家调整了立场",
-                    flush=True,
-                )
 
     evidence_pool = list(state.get("evidence_pool", []))
     known_evidence_ids = {

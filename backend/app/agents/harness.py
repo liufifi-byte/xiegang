@@ -245,13 +245,8 @@ class AgentHarness:
             basis_level = "moderate"
         else:
             basis_level = "limited"
-        position = result.position
-        if position == "undetermined":
-            position = {
-                "for": "support",
-                "against": "oppose",
-                "neutral": "defer",
-            }[result.stance]
+        # V3：新 stance 枚举（support/oppose/cautious/neutral）——lens 一致性兜底
+        lens_title = result.lens_title or self.profile.lens_title
         return result.model_copy(
             update={
                 "agent_id": self.profile.expert_id,
@@ -260,7 +255,7 @@ class AgentHarness:
                 "degraded": degraded,
                 "degradation_reason": reason if degraded else None,
                 "confidence": min(result.confidence, 0.6) if degraded else result.confidence,
-                "position": position,
+                "lens_title": lens_title,
                 "basis_level": basis_level,
             }
         )

@@ -18,8 +18,8 @@ class FinishAdapter:
                 agent_id="economist",
                 stance="neutral",
                 confidence=0.5,
-                thesis="需要更多信息",
-                reversal_conditions=["补充现金流信息"],
+                judgment="需要更多信息，暂缓判断。",
+                reversal_condition="补充现金流信息后重评。",
             ),
         )
 

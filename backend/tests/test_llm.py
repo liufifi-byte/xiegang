@@ -19,7 +19,7 @@ def test_evidence_rejects_invalid_strength():
 def test_member_statement_schema_validates():
     stmt = MemberStatement(
         member_id="suan",
-        stance="for",
+        stance="cautious",
         confidence=0.8,
         evidence=[
             Evidence(claim="期望值 5%", source="自计算", strength="high"),
@@ -28,7 +28,7 @@ def test_member_statement_schema_validates():
         reasoning_summary="数字看不合算",
     )
     assert stmt.member_id == "suan"
-    assert stmt.stance == "for"
+    assert stmt.stance == "cautious"
     assert len(stmt.evidence) == 2
     assert 0.7 <= stmt.confidence <= 0.9
 
@@ -37,7 +37,7 @@ def test_member_statement_rejects_confidence_out_of_range():
     import pytest
     with pytest.raises(Exception):
         MemberStatement(
-            member_id="x", stance="for", confidence=1.5,
+            member_id="x", stance="cautious", confidence=1.5,
             evidence=[], reasoning_summary="x",
         )
 
@@ -129,7 +129,7 @@ def test_structured_wrapper_falls_back_on_fenced_json(monkeypatch):
     from app.llm import _StructuredWrapper
     from app.schemas.member import MemberStatement
 
-    fenced = '```json\n{"member_id": "suan", "stance": "for", "confidence": 0.8, "evidence": [{"claim": "x", "source": "y", "strength": "high"}], "reasoning_summary": "ok"}\n```'
+    fenced = '```json\n{"member_id": "suan", "stance": "cautious", "confidence": 0.8, "evidence": [{"claim": "x", "source": "y", "strength": "high"}], "reasoning_summary": "ok"}\n```'
 
     class MockStructured:
         def invoke(self, prompt, **kwargs):
@@ -152,7 +152,7 @@ def test_structured_wrapper_falls_back_on_fenced_json(monkeypatch):
     result = wrapper.invoke("任意 prompt")
     assert isinstance(result, MemberStatement)
     assert result.member_id == "suan"
-    assert result.stance == "for"
+    assert result.stance == "cautious"
     assert len(result.evidence) == 1
 
 
@@ -161,7 +161,7 @@ def test_structured_wrapper_uses_native_when_ok(monkeypatch):
     from app.llm import _StructuredWrapper
 
     expected = MemberStatement(
-        member_id="chen", stance="against", confidence=0.9,
+        member_id="chen", stance="oppose", confidence=0.9,
         evidence=[], reasoning_summary="原生路径",
     )
 

@@ -82,11 +82,11 @@ def test_harness_removes_invented_evidence_refs_and_degrades_result():
     )
     result = ExpertResearchResult(
         agent_id="wrong",
-        stance="for",
+        stance="cautious",
         confidence=0.9,
-        thesis="结论",
+        judgment="结论：暂缓。",
         evidence_refs=["invented"],
-        reversal_conditions=["条件变化"],
+        reversal_condition="条件变化。",
     )
     validated = harness.validate_result(result)
     assert validated.agent_id == "economist"

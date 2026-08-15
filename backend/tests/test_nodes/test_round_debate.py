@@ -22,8 +22,8 @@ def test_format_history_empty():
 
 def test_format_history_returns_strings():
     transcript = [
-        {"speaker": "suan", "round": 0, "content": "数字看合算", "stance": "for"},
-        {"speaker": "chen", "round": 1, "content": "但风险大", "stance": "against"},
+        {"speaker": "suan", "round": 0, "content": "数字看合算", "stance": "cautious"},
+        {"speaker": "chen", "round": 1, "content": "但风险大", "stance": "oppose"},
     ]
     result = _format_history(transcript, "suan", 2)
     assert "suan" in result
@@ -34,7 +34,7 @@ def test_format_history_returns_strings():
 
 def test_format_history_truncates_long_content():
     long_text = "x" * 1000
-    transcript = [{"speaker": "suan", "round": 1, "content": long_text, "stance": "for"}]
+    transcript = [{"speaker": "suan", "round": 1, "content": long_text, "stance": "cautious"}]
     result = _format_history(transcript, "chen", 2)
     assert "..." in result
     assert len(result) < 550
@@ -47,7 +47,7 @@ def test_format_history_preserves_long_independent_judgment():
             "speaker": "economist",
             "round": 0,
             "content": long_text,
-            "stance": "against",
+            "stance": "oppose",
         }
     ]
     result = _format_history(transcript, "mathematician", 1)
@@ -55,15 +55,15 @@ def test_format_history_preserves_long_independent_judgment():
 
 
 def test_professional_role_prompt_includes_complete_persona():
-    role = _professional_role_prompt("mathematician", "理性", "证据审查")
+    role = _professional_role_prompt("mathematician", "理性")
     assert "专业身份" in role
-    assert "专业方法" in role
+    assert "专属栏目" in role
     assert "必须检查" in role
     assert "表达风格" in role
     assert "标志性问题" in role
     assert "专业边界" in role
-    assert "本轮额外职责：证据审查" in role
-    assert "腔调范例" in role
+    # V3: duty 段与腔调范例已删——专属栏目取代职责标签
+    assert "变量与阈值" in role
 
 
 def test_debate_prompt_no_longer_caps_reply_at_150_characters():
@@ -78,7 +78,7 @@ def test_run_debate_round_increments_round(monkeypatch):
 
     async def mock_debate(mid, name, role, topic, variables, round_num, history, user_interrupt=None):
         return MemberStatement(
-            member_id=mid, stance="for", confidence=0.7,
+            member_id=mid, stance="cautious", confidence=0.7,
             evidence=[Evidence(claim="x", source="y", strength="high")],
             reasoning_summary="mock debate reply",
         )
@@ -110,7 +110,7 @@ def test_run_debate_round_preserves_existing_transcript(monkeypatch):
 
     async def mock_debate(mid, name, role, topic, variables, round_num, history, user_interrupt=None, parliament_id=None):
         return MemberStatement(
-            member_id=mid, stance="for", confidence=0.7,
+            member_id=mid, stance="cautious", confidence=0.7,
             evidence=[], reasoning_summary="reply",
         )
 
@@ -118,7 +118,7 @@ def test_run_debate_round_preserves_existing_transcript(monkeypatch):
 
     existing_research = [
         {"speaker": "suan", "round": 0, "type": "research",
-         "content": "调研立场", "stance": "for", "confidence": 0.6},
+         "content": "调研立场", "stance": "cautious", "confidence": 0.6},
     ]
     state = {
         "topic": "x", "briefing": {"key_variables": []},
@@ -141,7 +141,7 @@ def test_run_debate_round_tension_calculation(monkeypatch):
     from app.schemas.member import MemberStatement
 
     # 5 个议员给不同立场：for, against, neutral, for, against
-    stances_queue = iter(["for", "against", "neutral", "for", "against"])
+    stances_queue = iter(["cautious", "oppose", "neutral", "cautious", "oppose"])
 
     async def mock_debate(mid, name, role, topic, variables, round_num, history, user_interrupt=None, parliament_id=None):
         return MemberStatement(
@@ -173,7 +173,7 @@ def test_run_debate_round_handles_member_error(monkeypatch):
         if call_count["n"] == 1:  # 第一个议员炸
             raise RuntimeError("LLM error")
         return MemberStatement(
-            member_id=mid, stance="for", confidence=0.6,
+            member_id=mid, stance="cautious", confidence=0.6,
             evidence=[], reasoning_summary="reply",
         )
 
@@ -206,7 +206,7 @@ def test_run_debate_round_injects_user_interrupt(monkeypatch):
     async def mock_debate(mid, name, role, topic, variables, round_num, history, user_interrupt=None, parliament_id=None):
         captured_interrupt["v"] = user_interrupt
         return MemberStatement(
-            member_id=mid, stance="for", confidence=0.6,
+            member_id=mid, stance="cautious", confidence=0.6,
             evidence=[], reasoning_summary="reply",
         )
 
@@ -253,7 +253,7 @@ def test_run_debate_round_uses_selected_professional_experts(monkeypatch):
 
     monkeypatch.setattr(rd_module, "_debate_one_member_async", mock_debate)
     selected = [
-        "mathematician", "economist", "psychologist", "artist", "politician"
+        "mathematician", "economist", "psychologist", "strategist", "contrarian"
     ]
     state = {
         "topic": "是否接 Offer",
@@ -274,5 +274,5 @@ def test_run_debate_round_uses_selected_professional_experts(monkeypatch):
     result = asyncio.run(run_debate_round(state))
     assert set(captured) == set(selected)
     assert captured["mathematician"][0] == "数学家"
-    assert "证据审查" in captured["mathematician"][1]
+    assert "变量与阈值" in captured["mathematician"][1]  # V3: lens 取代 duty
     assert len([e for e in result["transcript"] if e["type"] == "debate"]) == 5

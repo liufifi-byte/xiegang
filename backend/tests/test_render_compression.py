@@ -1,5 +1,7 @@
-"""测试 _render_public_research_statement 从 6 段压缩到 4 段，
-关键信息不丢失，旧标题不再出现。
+"""测试 spec v1.0 §4.1 四段公开回复契约的渲染。
+
+V3 重写：旧 6 段渲染（判断/依据/风险/未知/反转/行动）已被替换为
+【当前判断】【{lens}】【建议行动】(可选)【关键问题】(可选) 四段契约。
 """
 from app.agents.schemas import ExpertResearchResult
 from app.graph.nodes.parallel_research import _render_public_research_statement
@@ -7,15 +9,17 @@ from app.graph.nodes.parallel_research import _render_public_research_statement
 
 def _make_result(**overrides):
     base = dict(
-        agent_id="mathematician",
-        stance="against",
+        agent_id="economist",
+        stance="cautious",
         confidence=0.7,
-        thesis="当前投入占可用资金比例过高，机会成本不可忽略。",
-        key_risks=["需要用钱时被迫退出", "对手方激励不匹配"],
-        assumptions=["未来一年收入保持稳定"],
-        unknowns=["是否另有应急储备"],
-        reversal_conditions=["投入比例明显下降", "机会成本可证伪"],
-        next_actions=["列出未来十二个月的大额支出"],
+        judgment="当前更适合继续了解机会，而不是立即承诺。",
+        lens_title="成本与回报",
+        analysis_points=["留任收益含稳定现金流；跳槽收益依赖尚未确认的股权条款。"],
+        action="先取得书面股权条件再比较。",
+        key_question="如果股权最终价值为零，你还愿意接受这份工作吗？",
+        reversal_condition="书面条件显示现金与积累明显优于留任。",
+        evidence_refs=[],
+        assumptions=["股权条款尚未确认"],
         degraded=False,
         degradation_reason=None,
     )
@@ -23,101 +27,72 @@ def _make_result(**overrides):
     return ExpertResearchResult(**base)
 
 
-_EVIDENCE = [
-    {
-        "evidence_id": "ev_1",
-        "kind": "user_fact",
-        "supports_claim": "用户计划投入一半可用资金",
-        "source_title": "用户提供",
-    },
-    {
-        "evidence_id": "ev_2",
-        "kind": "web_source",
-        "supports_claim": "近 3 个月指数回报约 8%",
-        "source_title": "网页来源",
-    },
-]
+def test_renders_four_section_contract():
+    """四段契约按 spec §4.1 顺序出现。"""
+    out = _render_public_research_statement(_make_result(), [])
+    assert "【当前判断" in out
+    assert "【成本与回报】" in out          # lens_title 作为段名
+    assert "【建议行动】" in out
+    assert "【关键问题】" in out
+    # 顺序
+    assert out.index("【当前判断") < out.index("【成本与回报】")
+    assert out.index("【成本与回报】") < out.index("【建议行动】")
+    assert out.index("【建议行动】") < out.index("【关键问题】")
 
 
-def test_render_has_exactly_four_section_headers():
-    """渲染后应只有 4 个【】段标题，不是原来的 6 段。"""
-    out = _render_public_research_statement(_make_result(), _EVIDENCE)
-    sections = [line for line in out.split("\n\n") if line.startswith("【")]
-    assert len(sections) == 4
-
-
-def test_render_drops_old_section_headers():
-    """旧版本 5 个段标题应不再出现。"""
-    out = _render_public_research_statement(_make_result(), _EVIDENCE)
-    for stale in (
-        "【我最担心的地方】",
-        "【当前假设与未知】",
-        "【你下一步应该做什么】",
-    ):
-        assert stale not in out, f"旧标题未清理: {stale}"
-
-
-def test_render_keeps_four_new_headers():
-    """新版本段标题（P3 后判断段带视角签名后缀，用包含匹配）。"""
-    out = _render_public_research_statement(_make_result(), _EVIDENCE)
-    assert "【我的判断" in out          # · 视角签名跟在后面
-    assert "【关键依据】" in out
-    assert "【主要风险】" in out
-    assert "【什么时候我会改变判断】" in out
-
-
-def test_render_merges_assumptions_into_evidence():
-    """assumptions 被并入【关键依据】段（标注'核心假设'）。"""
-    out = _render_public_research_statement(_make_result(), _EVIDENCE)
-    assert "核心假设" in out
-    # 确保合并而不是独立段
-    assert "未来一年收入保持稳定" in out
-
-
-def test_render_merges_risks_and_unknowns_into_one():
-    """key_risks + unknowns 合并到【主要风险】。"""
-    out = _render_public_research_statement(_make_result(), _EVIDENCE)
-    risk_section = out.split("【主要风险】")[1]
-    assert "需要用钱时被迫退出" in risk_section
-    assert "仍需确认" in risk_section
-    assert "是否另有应急储备" in risk_section
-
-
-def test_render_works_without_evidence_records():
-    """P2 后：0 证据不再写免责声明句——证据段直接显示核心假设。"""
-    out = _render_public_research_statement(_make_result(evidence_refs=[]), [])
-    # 免责句已删（用户体感差、零信息量）
-    assert "本轮没有获得可核验的外部来源" not in out
-    # 假设仍在（信息量保留）
-    assert "核心假设" in out
-
-
-def test_render_handles_degraded_result():
-    """degraded=True 时：内部 reason 不再外露（P0 修复目的），
-    用户看到的是固定的"本轮分析受限"提示。
-    """
+def test_optional_sections_omitted_when_empty():
+    """action/key_question 为空 → 整段省略（spec：不强行凑满）。"""
     out = _render_public_research_statement(
-        _make_result(
-            degraded=True,
-            degradation_reason="超时强制 finalize",
-        ),
-        _EVIDENCE,
+        _make_result(action="", key_question=""), []
     )
-    # 内部错误码/系统术语不得出现在用户可见文案
-    assert "超时强制" not in out
-    assert "预算" not in out
-    assert "上限" not in out
-    # 固定降级提示应在
-    assert "本轮分析受限" in out
+    assert "【建议行动】" not in out
+    assert "【关键问题】" not in out
+    assert "【当前判断" in out
+    assert "【成本与回报】" in out
 
 
-def test_render_next_actions_field_dropped_but_other_fields_remain():
-    """next_actions 字段没出现在输出（移到 summary 阶段），
-    但 thesis / risks / unknowns / reversal 仍在。
-    """
-    out = _render_public_research_statement(_make_result(), _EVIDENCE)
-    # next_actions 已不在线性正文里展示
-    assert "列出未来十二个月的大额支出" not in out
-    # 其他关键字段仍在
-    assert "机会成本不可忽略" in out  # thesis
-    assert "投入比例明显下降" in out  # reversal_conditions
+def test_stance_labels_use_new_enum():
+    """V3 stance 枚举中文标签。"""
+    for stance, label in [
+        ("support", "建议推进"), ("oppose", "不建议"),
+        ("cautious", "谨慎推进"), ("neutral", "暂不判断"),
+    ]:
+        out = _render_public_research_statement(
+            _make_result(stance=stance), []
+        )
+        assert label in out, f"{stance} 应显示 {label}"
+
+
+def test_silent_result_renders_empty():
+    """should_speak=false → 一律空串不发布（spec §13.3 不发布伪观点）。"""
+    out = _render_public_research_statement(
+        _make_result(should_speak=False, judgment="低相关", analysis_points=[]), []
+    )
+    assert out == ""
+
+
+def test_no_system_words_in_output():
+    """渲染结果不得包含任何系统词（sanitizer + 契约共同保证）。"""
+    out = _render_public_research_statement(_make_result(), [])
+    for word in ("预算", "超时", "降级", "独立判断", "可核验来源"):
+        assert word not in out, f"系统词「{word}」泄漏"
+
+
+def test_no_evidence_text_inline():
+    """证据原文不进正文——正文只有 judgment 与自有分析。"""
+    out = _render_public_research_statement(_make_result(), [])
+    # 证据区字段根本不渲染（依据由前端可展开区显示）
+    assert "网页来源" not in out
+    assert "[ev_" not in out
+
+
+def test_legacy_stance_still_labels():
+    """历史数据（for/against）重放时标签兼容（bypass schema 直接测渲染）。"""
+    from types import SimpleNamespace
+    legacy = SimpleNamespace(
+        should_speak=True, stance="for", judgment="历史数据重放。",
+        lens_title="成本与回报", analysis_points=[], action="",
+        key_question="", evidence_refs=[],
+    )
+    out = _render_public_research_statement(legacy, [])
+    assert "支持" in out

@@ -11,11 +11,7 @@ def test_fixed_scene_preview_is_deterministic(client):
     data = response.json()
     assert data["selection_source"] == "category_rule"
     assert data["recommended_expert_ids"] == [
-        "mathematician",
-        "economist",
-        "psychologist",
-        "historian",
-        "politician",
+        "economist", "mathematician", "legal_scholar", "sociologist", "historian",
     ]
     assert set(data["reasons"]) == set(data["recommended_expert_ids"])
     assert "现金流" in data["coverage"]

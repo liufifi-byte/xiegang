@@ -40,8 +40,6 @@ class ExpertResearchAgentRunner:
         category: str = "general",
         sensitive_values: list[str] | None = None,
         cancel_check=None,
-        duty_hint: str | None = None,
-        force_stance: str | None = None,
     ):
         self.profile = profile
         self.harness = AgentHarness(
@@ -55,9 +53,6 @@ class ExpertResearchAgentRunner:
             cancel_check=cancel_check,
         )
         self.adapter = adapter or ResilientDecisionAdapter()
-        # duties 字段已分配但未传 LLM 的修复：把 duty_hint + force_stance 透传给图
-        self.duty_hint = duty_hint
-        self.force_stance = force_stance
 
     async def run(
         self,
@@ -69,8 +64,6 @@ class ExpertResearchAgentRunner:
         await self.harness.start()
         graph = ExpertResearchGraph(
             self.profile, self.harness, self.adapter,
-            duty_hint=self.duty_hint,
-            force_stance=self.force_stance,
         ).compile(checkpointer=checkpointer)
         state = {
             "run_id": self.harness.run_id,

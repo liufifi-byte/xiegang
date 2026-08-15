@@ -171,9 +171,9 @@ def _fallback_chair_for_state(
     member_info = member_info or runtime_member_info(state, MEMBER_INFO)
     if not state.get("selected_expert_ids"):
         return FALLBACK_CHAIR
-    duties = state.get("debate_duties", {})
+    # V3：兜底议长由逆向思考者担任（原 contrarian_challenge 职责位）
     contrarian = next(
-        (mid for mid, duty in duties.items() if duty == "contrarian_challenge"),
+        (mid for mid in member_info if mid == "contrarian"),
         None,
     )
     if contrarian in member_info:

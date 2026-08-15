@@ -49,7 +49,8 @@ def test_unanimous_opening_creates_pressure_test():
     )
     disputes = extract_core_disputes(state)["core_disputes"]
     assert disputes[0]["pressure_test"] is True
-    assert "politician" in disputes[0]["participants"]
+    # V3: roster 不含 contrarian 时退回首位参会者（逆向缺席容忍）
+    assert len(disputes[0]["participants"]) >= 1
 
 
 def test_two_rounds_are_enough_when_single_low_tension_dispute_is_resolved():

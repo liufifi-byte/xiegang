@@ -54,14 +54,16 @@ class EconomistSequenceAdapter:
             action="finish",
             result=ExpertResearchResult(
                 agent_id="economist",
-                stance="for",
+                stance="support",
                 confidence=0.72,
-                thesis="现金增量明确，但股权和职责边界仍决定真实机会成本。",
+                judgment="现金增量明确，但股权与职责边界决定真实机会成本。",
+                lens_title="成本与回报",
+                analysis_points=["留任收益含平台资源；跳槽收益依赖未确认的股权条款。"],
+                action="核实股权条款与决策权后再比较。",
+                key_question="如果股权归零，这份工作还值得吗？",
+                reversal_condition="现金流安全垫不足六个月。",
                 evidence_refs=[evidence_match.group(1)],
                 assumptions=["新岗位现金薪资确实提高20%"],
-                unknowns=["股权兑现概率", "职责边界"],
-                reversal_conditions=["现金流安全垫不足六个月", "核心条款无法写入合同"],
-                next_actions=["核实股权条款", "与招聘方确认决策权"],
             ),
         )
 
@@ -120,8 +122,8 @@ async def test_economist_vertical_slice_reacts_safely_and_cites_real_evidence():
     assert state["metrics"]["tool_calls"] == 2
     assert state["final_result"]["degraded"] is False
     assert len(state["final_result"]["evidence_refs"]) == 1
-    assert state["final_result"]["unknowns"]
-    assert state["final_result"]["reversal_conditions"]
+    assert state["final_result"]["key_question"]  # V3: unknowns → key_question
+    assert state["final_result"]["reversal_condition"]
 
     assert len(captured_queries) == 1
     assert "星河内部项目" not in captured_queries[0]

@@ -1,3 +1,4 @@
+"""V3（spec §3/§7）：八人专家库选择测试——duties 已删除。"""
 from app.graph.nodes.select_experts import DEFAULT_ROSTER, select_experts
 
 
@@ -13,23 +14,12 @@ def test_selector_returns_five_unique_known_experts():
     assert len(selected) == 5
     assert len(set(selected)) == 5
     assert "historian" in selected
-    assert "artist" not in selected
+    assert "legal_scholar" in selected     # 房产涉及合同/贷款条款
+    assert "artist" not in selected        # 已删除的角色不得出现
+    assert "politician" not in selected
     assert set(result["expert_selection_reasons"]) == set(selected)
-    assert set(result["debate_duties"]) == set(selected)
-    assert set(result["debate_duties"].values()) == {
-        "evidence_audit",
-        "downside_risk",
-        "opportunity_scan",
-        "long_term_path",
-        "contrarian_challenge",
-    }
-    assert result["debate_duties"] == {
-        "mathematician": "evidence_audit",
-        "historian": "downside_risk",
-        "economist": "opportunity_scan",
-        "psychologist": "long_term_path",
-        "politician": "contrarian_challenge",
-    }
+    # V3：duties 删除——恒空 dict（state 形状兼容）
+    assert result["debate_duties"] == {}
 
 
 def test_offer_uses_stable_default_professional_roster():
@@ -37,6 +27,8 @@ def test_offer_uses_stable_default_professional_roster():
         {"topic": "要不要接 Offer", "category": "offer", "briefing": {}}
     )
     assert result["selected_expert_ids"] == list(DEFAULT_ROSTER)
+    assert "strategist" in result["selected_expert_ids"]
+    assert "contrarian" in result["selected_expert_ids"]
 
 
 def test_general_relationship_topic_prefers_non_economic_lenses():
@@ -49,8 +41,8 @@ def test_general_relationship_topic_prefers_non_economic_lenses():
     )
     selected = result["selected_expert_ids"]
     assert "psychologist" in selected
-    assert "artist" in selected
-    assert "politician" in selected
+    assert "sociologist" in selected       # 家庭冲突 → 关系环境视角
+    assert "contrarian" in selected     # 二选一措辞命中第三方案视角
     assert len(selected) == 5
 
 
@@ -64,7 +56,7 @@ def test_selector_is_deterministic():
 
 
 def test_selector_preserves_user_confirmed_roster():
-    selected = ["artist", "psychologist", "historian"]
+    selected = ["contrarian", "psychologist", "historian"]
     result = select_experts(
         {
             "topic": "要不要换一种生活方式",
@@ -75,4 +67,20 @@ def test_selector_preserves_user_confirmed_roster():
     )
     assert result["selected_expert_ids"] == selected
     assert set(result["expert_selection_reasons"]) == set(selected)
-    assert set(result["debate_duties"]) == set(selected)
+    assert result["debate_duties"] == {}
+
+
+def test_removed_roles_are_rejected():
+    """已删除的角色 ID 不得再被选中（未知 profile 过滤）。"""
+    result = select_experts(
+        {
+            "topic": "x",
+            "category": "general",
+            "briefing": {},
+            "selected_expert_ids": ["artist", "politician", "economist"],
+        }
+    )
+    # selection_state 过滤未知 ID
+    assert "artist" not in result["selected_expert_ids"]
+    assert "politician" not in result["selected_expert_ids"]
+    assert "economist" in result["selected_expert_ids"]
