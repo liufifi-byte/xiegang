@@ -61,7 +61,9 @@ def get_llm(
 
     settings = get_settings()
     extra_kwargs = {}
-    if fast and settings.glm_fast_disable_thinking:
+    if settings.glm_disable_thinking or (
+        fast and settings.glm_fast_disable_thinking
+    ):
         # 智谱 API 的思考开关（openai 兼容层走 extra_body 透传）
         extra_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
     return ChatOpenAI(

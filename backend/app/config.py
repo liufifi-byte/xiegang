@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     # 研究轮保 glm-5（多步推理质量优先）。新键：老 .env 无此变量时默认值直接生效。
     glm_fast_model: str = "glm-5-turbo"
     glm_fast_disable_thinking: bool = True
+    # 全局关思考（含研究轮）。配合 glm-5.3-highspeed 等"高速 + 无思考"用法：
+    # 切换时在 .env 设 GLM_MODEL=glm-5.3-highspeed + GLM_DISABLE_THINKING=true。
+    # 默认 false——研究轮（glm-5）需要深度思考，不要全局默认关。
+    glm_disable_thinking: bool = False
     glm_embedding_model: str = "embedding-3"
     glm_request_timeout_seconds: float = 180.0
     glm_max_retries: int = 0
