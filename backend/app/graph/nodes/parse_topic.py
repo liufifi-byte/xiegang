@@ -99,7 +99,7 @@ def parse_topic(state: dict) -> dict:
             state, category_hint, classification_degraded=False
         )
 
-    structured = get_structured_llm(TopicBriefing, temperature=0.3)
+    structured = get_structured_llm(TopicBriefing, temperature=0.3, fast=True)
     prompt = PARSE_PROMPT.format(
         topic=state["topic"],
         background=state.get("user_background") or "（无）",

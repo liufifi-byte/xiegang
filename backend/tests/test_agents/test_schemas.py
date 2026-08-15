@@ -48,6 +48,73 @@ def test_agent_decision_finish_payload_is_exclusive():
     assert decision.tool_request is None
 
 
+# ============================================================
+# AgentDecision.repair_envelope：GLM 结构化输出事故回归
+# （真实案例：议会 45577003 心理学家，action 被填成中文说明句、
+#   ExpertResearchResult 字段平铺在顶层 → literal_error → 专家整场沉默）
+# ============================================================
+
+# 事故原文形态（截取自 degradation_reason 里的 raw_content）
+_PSYCHOLOGIST_FLAT = {
+    "lens_title": "动机与冲突",
+    "judgment": "谨慎推进。成长动机清晰，但需警惕用能力自信掩盖竞业封锁的现实风险。",
+    "analysis_points": [
+        "用户认为技能抢手回市场不难，但这可能是在用个人能力自信防御竞业风险焦虑。"
+    ],
+    "action": "建议进行一次防御性验证，确认退路的真实性。",
+}
+
+
+def test_agent_decision_repairs_flattened_result_payload():
+    """结论字段平铺 + action 是说明句 → 包装成 finish，内容不丢。"""
+    decision = AgentDecision.model_validate(dict(_PSYCHOLOGIST_FLAT))
+    assert decision.action == "finish"
+    assert decision.result is not None
+    assert decision.result.lens_title == "动机与冲突"
+    assert "能力自信" in decision.result.judgment
+    assert len(decision.result.analysis_points) == 1
+    # 缺失的必填字段有兜底值
+    assert decision.result.agent_id == ""
+    assert decision.result.stance == "neutral"
+    assert decision.result.confidence == 0.3
+
+
+def test_agent_decision_repairs_sentence_action_with_nested_result():
+    """action 是说明句但 result 已嵌套 → 只纠正 action。"""
+    decision = AgentDecision.model_validate(
+        {
+            "action": "信息已足够，直接给出最终结论。",
+            "result": _result().model_dump(),
+        }
+    )
+    assert decision.action == "finish"
+    assert decision.result.agent_id == "economist"
+
+
+def test_agent_decision_repairs_sentence_action_with_tool_request():
+    """action 是说明句但带 tool_request → 纠正为 tool。"""
+    decision = AgentDecision.model_validate(
+        {
+            "action": "需要先核实竞业协议的赔偿条款",
+            "tool_request": {
+                "tool_name": "web_search",
+                "arguments": {"query": "竞业协议 赔偿 判例"},
+                "public_intent": "verify_public_fact",
+            },
+        }
+    )
+    assert decision.action == "tool"
+    assert decision.tool_request.tool_name == "web_search"
+
+
+def test_agent_decision_valid_envelope_untouched():
+    """合法输入不经修复器改写（action 合法时原样返回）。"""
+    raw = {"action": "tool", "tool_request": None, "result": None, "extra": 1}
+    # action 合法但 tool_request 缺失 → 仍按原逻辑报错（修复器不越权）
+    with pytest.raises(ValidationError):
+        AgentDecision.model_validate(raw)
+
+
 @pytest.mark.parametrize(
     "payload",
     [

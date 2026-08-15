@@ -86,7 +86,7 @@ async def _one_endorsement(
     )
 
     try:
-        structured = get_structured_llm(ChairEndorsement, temperature=0.6)
+        structured = get_structured_llm(ChairEndorsement, temperature=0.6, fast=True)
         result = await asyncio.wait_for(structured.ainvoke(prompt), timeout=30)
         # 强制：不能推荐自己
         if result.recommend_target == expert_id:

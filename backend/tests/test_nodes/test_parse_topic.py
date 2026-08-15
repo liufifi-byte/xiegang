@@ -26,7 +26,7 @@ def test_parse_topic_returns_required_fields(monkeypatch):
 
     monkeypatch.setattr(
         pt_module, "get_structured_llm",
-        lambda schema, temperature=0.5: MockStructuredLLM(),
+        lambda schema, temperature=0.5, **kwargs: MockStructuredLLM(),
     )
 
     state = {
@@ -56,7 +56,7 @@ def test_parse_topic_falls_back_to_general_on_invalid_category(monkeypatch):
 
     monkeypatch.setattr(
         pt_module, "get_structured_llm",
-        lambda schema, temperature=0.5: MockStructuredLLM(),
+        lambda schema, temperature=0.5, **kwargs: MockStructuredLLM(),
     )
 
     state = {"topic": "test", "user_background": None, "topic_category": None}

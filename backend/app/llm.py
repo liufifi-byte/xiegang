@@ -44,14 +44,28 @@ def _is_rate_limit_error(err: BaseException) -> bool:
     return any(marker in text for marker in _RATE_LIMIT_MARKERS)
 
 
-def get_llm(temperature: float = 0.7, max_tokens: int = 2000):
-    """返回配置好的 GLM-5 ChatOpenAI 客户端。"""
+def get_llm(
+    temperature: float = 0.7,
+    max_tokens: int = 2000,
+    *,
+    fast: bool = False,
+):
+    """返回配置好的 GLM ChatOpenAI 客户端。
+
+    fast=True 用延迟敏感轮次（辩论/选举/总结/会前流程）的快速模型
+    （settings.glm_fast_model，默认 glm-5-turbo）并默认关闭深度思考：
+    实测辩论类调用从 ~28s 降到 ~2s。研究轮保持 glm-5 开思考。
+    """
     # 延迟 import：避免在 module import 时就创建客户端（测试环境用不上）
     from langchain_openai import ChatOpenAI
 
     settings = get_settings()
+    extra_kwargs = {}
+    if fast and settings.glm_fast_disable_thinking:
+        # 智谱 API 的思考开关（openai 兼容层走 extra_body 透传）
+        extra_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
     return ChatOpenAI(
-        model=settings.glm_model,
+        model=settings.glm_fast_model if fast else settings.glm_model,
         openai_api_key=settings.glm_api_key,
         openai_api_base=settings.glm_base_url,
         temperature=temperature,
@@ -60,7 +74,13 @@ def get_llm(temperature: float = 0.7, max_tokens: int = 2000):
         # 重要：max_retries 由 langchain SDK 内部处理，仅对网络/连接类错误重试，
         # 不影响本文件 _StructuredWrapper 的"立即二次调用"行为。
         max_retries=settings.glm_max_retries,
+        **extra_kwargs,
     )
+
+
+def get_fast_llm(temperature: float = 0.7, max_tokens: int = 2000):
+    """辩论/选举/总结等延迟敏感轮次的快捷入口（fast 模型 + 关思考）。"""
+    return get_llm(temperature=temperature, max_tokens=max_tokens, fast=True)
 
 
 def extract_json_from_text(text: str) -> str:
@@ -100,10 +120,18 @@ class _StructuredWrapper:
       4. 二次 parse 仍失败 → 抛融合异常（含两次错误信息）。
     """
 
-    def __init__(self, schema: type[T], temperature: float):
+    def __init__(self, schema: type[T], temperature: float, fast: bool = False):
         self.schema = schema
-        self.llm = get_llm(temperature=temperature)
-        self.structured = self.llm.with_structured_output(schema)
+        self.llm = get_llm(temperature=temperature, fast=fast)
+        if fast:
+            # glm-5-turbo 关思考后对 json_schema/json_mode 响应格式服从性差
+            # （实测返回散文或 {"answer":{...}} 错壳）；function_calling 强制
+            # 走 tool call，实测 2.0s 稳定产出合规结构。非 fast 路径保持原行为。
+            self.structured = self.llm.with_structured_output(
+                schema, method="function_calling"
+            )
+        else:
+            self.structured = self.llm.with_structured_output(schema)
 
     def invoke(self, prompt, **kwargs):
         try:
@@ -162,10 +190,15 @@ class _StructuredWrapper:
                 ) from structured_err
 
 
-def get_structured_llm(schema: type[BaseModel], temperature: float = 0.5):
+def get_structured_llm(
+    schema: type[BaseModel],
+    temperature: float = 0.5,
+    *,
+    fast: bool = False,
+):
     """返回容错的结构化输出 LLM。
 
     返回对象支持 `.invoke(prompt)` 同步 和 `.ainvoke(prompt)` 异步接口，
-    返回 Pydantic schema 实例。
+    返回 Pydantic schema 实例。fast=True 走快速模型（辩论/选举/会前流程）。
     """
-    return _StructuredWrapper(schema, temperature)
+    return _StructuredWrapper(schema, temperature, fast=fast)

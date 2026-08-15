@@ -134,7 +134,7 @@ def _generate_pitches(state: dict) -> list[ElectionPitch]:
             member_id=mid,
         )
         try:
-            structured = get_structured_llm(ElectionPitch, temperature=0.6)
+            structured = get_structured_llm(ElectionPitch, temperature=0.6, fast=True)
             pitch: ElectionPitch = structured.invoke(prompt)
             pitch.member_id = mid
             # 强制约束：不能推荐自己

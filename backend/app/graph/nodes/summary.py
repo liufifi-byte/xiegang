@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 
-from app.llm import get_llm
+from app.llm import get_fast_llm
 
 
 SUMMARY_PROMPT = """你是 Decision Council 的中立主持人，不属于任何专家，也不参加竞选。
@@ -238,7 +238,7 @@ def run_summary(state: dict) -> dict:
     decision_model = state.get("decision_model", {})
 
     try:
-        response = get_llm(temperature=0.35, max_tokens=2600).invoke(
+        response = get_fast_llm(temperature=0.35, max_tokens=2600).invoke(
             SUMMARY_PROMPT.format(
                 topic=state.get("topic", ""),
                 decision_model=json.dumps(decision_model, ensure_ascii=False),

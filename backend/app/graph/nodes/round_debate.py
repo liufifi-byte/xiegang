@@ -154,7 +154,7 @@ async def _debate_one_member_async(
     if user_interrupt:
         prompt += INTERRUPT_PROMPT_BLOCK.format(user_interrupt=user_interrupt)
 
-    structured = get_structured_llm(MemberStatement, temperature=0.7)
+    structured = get_structured_llm(MemberStatement, temperature=0.7, fast=True)
     # 公平分槽：与 parallel_research lock-ordering 一致（先全局后议会）
     async with acquire_llm_slots(parliament_id):
         # V2-S2: 真异步 + cancel_guard

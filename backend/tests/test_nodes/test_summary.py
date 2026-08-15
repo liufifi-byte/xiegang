@@ -91,7 +91,7 @@ def test_run_summary_is_neutral_and_excludes_agent_work_paths(monkeypatch):
 
             return Response()
 
-    monkeypatch.setattr(sm_module, "get_llm", lambda **kwargs: MockLLM())
+    monkeypatch.setattr(sm_module, "get_fast_llm", lambda **kwargs: MockLLM())
     summary = run_summary(_state())["summary"]
     assert summary["recommendation"] == payload["recommendation"]
     assert summary["chair"] is None
@@ -109,7 +109,7 @@ def test_summary_groups_four_evidence_kinds(monkeypatch):
         def invoke(self, prompt):
             raise TimeoutError()
 
-    monkeypatch.setattr(sm_module, "get_llm", lambda **kwargs: BrokenLLM())
+    monkeypatch.setattr(sm_module, "get_fast_llm", lambda **kwargs: BrokenLLM())
     state = _state(
         agent_results={
             "mathematician": {

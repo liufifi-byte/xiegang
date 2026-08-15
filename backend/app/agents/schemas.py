@@ -164,6 +164,38 @@ class AgentDecision(BaseModel):
     tool_request: ToolRequest | None = None
     result: ExpertResearchResult | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def repair_envelope(cls, data: Any) -> Any:
+        """修复 GLM 结构化输出的两类真实事故（议会 45577003 心理学家案）。
+
+        1. 模型把 ExpertResearchResult 字段（judgment/lens_title/...）直接平铺在
+           顶层、完全跳过 AgentDecision 外壳 → 把整包包成 {"action":"finish","result":...}。
+           不修则 Pydantic literal_error 让整个专家 should_speak=false 沉默，
+           尽管内容本身质量合格。
+        2. action 被填成说明句而非 'tool'/'finish' → 按载荷推断真实意图：
+           有 tool_request → tool；有 result 或结论字段 → finish。
+
+        wrap 时对 result 必填字段兜底（agent_id 空/stance neutral/confidence 低）：
+        比整包丢弃好——内容是模型真实产出的分析，丢了就是"专家沉默"。
+        """
+        if not isinstance(data, dict):
+            return data
+        action = data.get("action")
+        if action in ("tool", "finish"):
+            return data
+        if data.get("tool_request") and not data.get("result"):
+            return {**data, "action": "tool"}
+        if "result" in data:
+            return {**data, "action": "finish"}
+        if any(k in data for k in ("judgment", "analysis_points", "lens_title")):
+            payload = {k: v for k, v in data.items() if k != "action"}
+            payload.setdefault("agent_id", "")
+            payload.setdefault("stance", "neutral")
+            payload.setdefault("confidence", 0.3)
+            return {"action": "finish", "result": payload}
+        return data
+
     @model_validator(mode="after")
     def action_payload_is_exclusive(self) -> "AgentDecision":
         if self.action == "tool":

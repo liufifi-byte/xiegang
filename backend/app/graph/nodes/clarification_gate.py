@@ -295,7 +295,7 @@ async def assess_clarification_need(state: dict) -> dict:
         async with get_llm_semaphore():
             decision = await asyncio.wait_for(
                 get_structured_llm(
-                    ClarificationDecision, temperature=0.2
+                    ClarificationDecision, temperature=0.2, fast=True
                 ).ainvoke(prompt),
                 timeout=10,
             )

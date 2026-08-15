@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     glm_api_key: str
     glm_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
     glm_model: str = "glm-5"
+    # 延迟敏感轮次（辩论/选举/总结/会前流程）专用快速模型。
+    # 实测（2026-08-15）：glm-5 开思考单次 ~28s，glm-5-turbo 关思考 ~2s；
+    # 辩论轮 5 专家 × 3 轮 = 15 次调用，是超时降级重灾区。
+    # 研究轮保 glm-5（多步推理质量优先）。新键：老 .env 无此变量时默认值直接生效。
+    glm_fast_model: str = "glm-5-turbo"
+    glm_fast_disable_thinking: bool = True
     glm_embedding_model: str = "embedding-3"
     glm_request_timeout_seconds: float = 180.0
     glm_max_retries: int = 0
