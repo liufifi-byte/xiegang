@@ -133,14 +133,21 @@ export default function ParliamentPage() {
         const snapshotMembers = snapshot.members_state || {};
         setMemberStatus(
           Object.fromEntries(
-            ids.map((id) => [
-              id,
-              snapshotMembers[id]?.degraded
-                ? "degraded"
-                : snapshotMembers[id]
-                ? "done"
-                : "idle",
-            ])
+            ids.map((id) => {
+              const m = snapshotMembers[id] as
+                | { degraded?: boolean; should_speak?: boolean }
+                | undefined;
+              return [
+                id,
+                !m
+                  ? "idle"
+                  : m.should_speak === false
+                  ? "silent"
+                  : m.degraded
+                  ? "degraded"
+                  : "done",
+              ];
+            })
           ) as Partial<Record<MemberId, MemberStatus>>
         );
         if (snapshot.status === "done") setStatus("done");
@@ -224,28 +231,38 @@ export default function ParliamentPage() {
         if (
           event.type === "expert_completed" &&
           event.expert_id &&
-          event.member &&
-          event.entry
+          event.member
         ) {
           const expertId = event.expert_id as MemberId;
-          const completedMember = event.member;
-          const completedEntry = event.entry;
+          const completedMember = event.member as {
+            degraded?: boolean;
+            should_speak?: boolean;
+          };
           setServerPhase("researching");
           setMemberStatus((prev) => ({
             ...prev,
-            [expertId]: completedMember.degraded ? "degraded" : "done",
+            [expertId]:
+              completedMember.should_speak === false
+                ? "silent"
+                : completedMember.degraded
+                ? "degraded"
+                : "done",
           }));
-          setTranscript((prev) => {
-            if (
-              prev.some(
-                (item) =>
-                  item.type === "research" && item.speaker === expertId
-              )
-            ) {
-              return prev;
-            }
-            return [...prev, completedEntry as TranscriptEntry];
-          });
+          // silent 专家（should_speak=false）entry 为 null——只更新座位状态，不追加 bubble
+          if (event.entry) {
+            const completedEntry = event.entry;
+            setTranscript((prev) => {
+              if (
+                prev.some(
+                  (item) =>
+                    item.type === "research" && item.speaker === expertId
+                )
+              ) {
+                return prev;
+              }
+              return [...prev, completedEntry as TranscriptEntry];
+            });
+          }
           return;
         }
 
@@ -350,12 +367,20 @@ export default function ParliamentPage() {
             });
           }
 
-          // 议员完成调研：替换开场白 + 状态 done
+          // 议员完成调研：替换开场白 + 状态 done（should_speak=false → silent）
           if (payload.members && typeof payload.members === "object") {
             setMemberStatus((prev) => {
               const next = { ...prev };
               (Object.keys(payload.members!) as MemberId[]).forEach((k) => {
-                next[k] = payload.members?.[k]?.degraded ? "degraded" : "done";
+                const m = payload.members?.[k] as
+                  | { degraded?: boolean; should_speak?: boolean }
+                  | undefined;
+                next[k] =
+                  m?.should_speak === false
+                    ? "silent"
+                    : m?.degraded
+                    ? "degraded"
+                    : "done";
               });
               return next;
             });
@@ -474,10 +499,17 @@ export default function ParliamentPage() {
         if (snapshot.members_state) {
           setMemberStatus(
             Object.fromEntries(
-              Object.entries(snapshot.members_state).map(([k, v]) => [
-                k as MemberId,
-                ((v as { degraded?: boolean })?.degraded ? "degraded" : "done") as MemberStatus,
-              ])
+              Object.entries(snapshot.members_state).map(([k, v]) => {
+                const m = v as { degraded?: boolean; should_speak?: boolean };
+                return [
+                  k as MemberId,
+                  (m.should_speak === false
+                    ? "silent"
+                    : m.degraded
+                    ? "degraded"
+                    : "done") as MemberStatus,
+                ];
+              })
             ) as Partial<Record<MemberId, MemberStatus>>
           );
         }
@@ -956,6 +988,7 @@ function MemberDetailDrawer({
                     organizing: "正在整理分析依据...",
                     speaking: "正在发言...",
                     done: "已完成本轮",
+                    silent: "本轮未发言",
                     degraded: "基于有限信息完成",
                     error: "出错",
                   }[status]

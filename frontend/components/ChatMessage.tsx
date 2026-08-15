@@ -1,16 +1,20 @@
 "use client";
 
 import { useState } from "react";
-import { getMember, TranscriptEntry } from "@/lib/types";
+import { getMember, Stance, TranscriptEntry } from "@/lib/types";
 
 interface Props {
   entry: TranscriptEntry;
 }
 
-const STANCE_BADGE: Record<string, { label: string; bg: string; text: string }> = {
-  for:     { label: "支持", bg: "bg-stance-forBg",     text: "text-stance-forText" },
-  against: { label: "反对", bg: "bg-stance-againstBg", text: "text-stance-againstText" },
-  neutral: { label: "中立", bg: "bg-stance-neutralBg", text: "text-stance-neutralText" },
+/** V3 四值枚举；for/against 仅历史议会数据 */
+const STANCE_BADGE: Record<Stance, { label: string; bg: string; text: string }> = {
+  support: { label: "建议推进", bg: "bg-stance-forBg",     text: "text-stance-forText" },
+  oppose:  { label: "不建议",   bg: "bg-stance-againstBg", text: "text-stance-againstText" },
+  cautious:{ label: "谨慎推进", bg: "bg-stance-neutralBg", text: "text-stance-neutralText" },
+  neutral: { label: "中立",     bg: "bg-stance-neutralBg", text: "text-stance-neutralText" },
+  for:     { label: "支持",     bg: "bg-stance-forBg",     text: "text-stance-forText" },
+  against: { label: "反对",     bg: "bg-stance-againstBg", text: "text-stance-againstText" },
 };
 
 export function ChatMessage({ entry }: Props) {
@@ -35,6 +39,8 @@ export function ChatMessage({ entry }: Props) {
   const color = member.color;
   const stance = entry.stance ? STANCE_BADGE[entry.stance] : null;
   const isError = entry.type === "debate_error";
+  // 降级发言：斜体淡化提示，但不红色（区别于 debate_error）
+  const isDegraded = entry.type === "debate_degraded";
   const evidenceLen = entry.evidence?.length || 0;
   const time = entry.timestamp || formatTime(entry.round);
 
@@ -50,21 +56,11 @@ export function ChatMessage({ entry }: Props) {
 
       {/* 气泡主体 */}
       <div className="flex-1 min-w-0">
-        {/* 名字 + 时间 */}
+        {/* 名字 + 时间（"独立判断"/轮次只在这里出现一次，spec §14.2） */}
         <div className="flex items-baseline gap-2 mb-1">
           <span className="text-sm font-medium" style={{ color }}>
             {member.display_name}
           </span>
-          {entry.round !== undefined && (
-            <span className="text-xs text-ink-subtle">
-              {entry.round === 0 ? "独立判断" : `第 ${entry.round} 轮`}
-            </span>
-          )}
-          {entry.duty && (
-            <span className="rounded bg-[#f2edf0] px-1.5 py-0.5 text-[10px] text-[#746a72]">
-              {entry.duty}
-            </span>
-          )}
           <span className="text-xs text-ink-subtle">{time}</span>
         </div>
 
@@ -74,11 +70,15 @@ export function ChatMessage({ entry }: Props) {
           style={{ borderLeft: `3px solid ${color}` }}
         >
           <div
-            className={`text-sm leading-relaxed whitespace-pre-wrap break-words ${
-              isError ? "text-stance-againstText italic" : "text-ink"
+            className={`text-sm leading-relaxed break-words ${
+              isError
+                ? "text-stance-againstText italic"
+                : isDegraded
+                ? "text-ink-muted italic"
+                : "text-ink"
             }`}
           >
-            {entry.content}
+            {renderParagraphs(entry.content, color)}
           </div>
 
           {/* 展开证据按钮 */}
@@ -113,30 +113,44 @@ export function ChatMessage({ entry }: Props) {
           )}
         </div>
 
-        {/* meta：只展示倾向与判断基础，不展示模型自报置信度 */}
-        {(stance || entry.basis_level) && (
+        {/* meta：只展示倾向徽章；basis_level 是内部质量信号，不再显示（spec §14.2） */}
+        {stance && (
           <div className="flex items-center gap-2 mt-1.5 text-xs">
-            {stance && (
-              <span
-                className={`px-1.5 py-0.5 rounded ${stance.bg} ${stance.text}`}
-              >
-                {stance.label}
-              </span>
-            )}
-            {entry.basis_level && (
-              <span className="text-ink-subtle">
-                {{
-                  limited: "判断基础有限",
-                  moderate: "判断基础一般",
-                  strong: "判断基础较强",
-                }[entry.basis_level]}
-              </span>
-            )}
+            <span
+              className={`px-1.5 py-0.5 rounded ${stance.bg} ${stance.text}`}
+            >
+              {stance.label}
+            </span>
           </div>
         )}
       </div>
     </div>
   );
+}
+
+/**
+ * V3 四段契约渲染：后端 content 是【】标题 + 空行分段的纯文本。
+ * 按空行拆段，段首的【标题】用专家色加粗，其余原样展示（保留段内换行）。
+ */
+function renderParagraphs(content: string, color: string) {
+  return content.split(/\n{2,}/).map((para, i) => {
+    const match = para.match(/^(【[^】]+】)([\s\S]*)$/);
+    if (!match) {
+      return (
+        <p key={i} className="whitespace-pre-wrap">
+          {para}
+        </p>
+      );
+    }
+    return (
+      <p key={i} className="whitespace-pre-wrap">
+        <span className="font-semibold" style={{ color }}>
+          {match[1]}
+        </span>
+        {match[2]}
+      </p>
+    );
+  });
 }
 
 function formatTime(round?: number): string {

@@ -315,9 +315,12 @@ function MemberStanceBar({
   stances: Record<string, { stance: Stance; confidence: number }>;
 }) {
   const labels: Record<Stance, string> = {
+    support: "建议推进",
+    oppose: "不建议",
+    cautious: "谨慎推进",
+    neutral: "暂不判断",
     for: "支持",
     against: "反对",
-    neutral: "暂缓 / 条件判断",
   };
   return (
     <div className="flex flex-wrap gap-3">

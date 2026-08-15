@@ -13,11 +13,11 @@ import { CouncilDraft, loadCouncilDraft } from "@/lib/council-draft";
 import { ExpertId, MEMBERS } from "@/lib/types";
 
 const FALLBACK_EXPERTS: ExpertId[] = [
-  "mathematician",
   "economist",
   "psychologist",
-  "artist",
-  "politician",
+  "strategist",
+  "legal_scholar",
+  "contrarian",
 ];
 
 export default function CouncilSetupPage() {
@@ -197,7 +197,7 @@ export default function CouncilSetupPage() {
           <div className="mb-6 flex items-end justify-between gap-5">
             <div>
               <p className="text-xs font-extrabold tracking-[0.13em] text-[#ec403d]">
-                六种思考方法
+                八种思考方法
               </p>
               <h2 className="mt-2 font-serif text-[27px] leading-tight sm:text-[38px]">
                 让哪些视角参与讨论？

@@ -9,6 +9,7 @@ const STATUS_LABEL: Record<MemberStatus, string> = {
   organizing: "整理证据",
   speaking: "正在发言",
   done: "已形成判断",
+  silent: "本轮未发言",
   degraded: "信息有限",
   error: "本轮未完成",
 };

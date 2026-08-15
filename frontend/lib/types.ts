@@ -3,11 +3,27 @@ export type ExpertId =
   | "economist"
   | "psychologist"
   | "historian"
+  | "strategist"
+  | "legal_scholar"
+  | "sociologist"
+  | "contrarian";
+export type LegacyMemberId =
+  | "suan"
+  | "chen"
+  | "ji"
+  | "nian"
+  | "fan"
   | "artist"
   | "politician";
-export type LegacyMemberId = "suan" | "chen" | "ji" | "nian" | "fan";
 export type MemberId = ExpertId | LegacyMemberId;
-export type Stance = "for" | "against" | "neutral";
+/** V3 四值枚举 + 历史议会旧值（for/against 仅用于渲染归档数据） */
+export type Stance =
+  | "support"
+  | "oppose"
+  | "cautious"
+  | "neutral"
+  | "for"
+  | "against";
 export type DecisionPosition =
   | "support"
   | "oppose"
@@ -32,39 +48,59 @@ export interface Member {
   model: string;
   /** V1-S4 标志句式：每议员的招牌问句 */
   signature_line: string;
+  /** V3 专属栏目名（spec §6，如"成本与回报"），与后端 profiles.py 一致 */
+  lens_title?: string;
 }
 
-/** 六位职业专家；每场由后端选择五位。 */
+/** 八人专家库（spec §3）；每场由用户选 3–5 位。 */
 export const MEMBERS: Member[] = [
-  {
-    id: "mathematician", display_name: "数学家", color: "#6F4878", role: "决策科学", avatar_char: "数",
-    model: "决策理论 · 概率 · 敏感性分析",
-    signature_line: "改变哪个变量，会让答案反过来？",
-  },
   {
     id: "economist", display_name: "经济学家", color: "#9B4D68", role: "经济分析", avatar_char: "经",
     model: "机会成本 · 激励机制 · 边际收益",
     signature_line: "你真正放弃的那个选项，值多少钱？",
+    lens_title: "成本与回报",
   },
   {
     id: "psychologist", display_name: "心理学家", color: "#A45B52", role: "心理分析", avatar_char: "心",
     model: "价值澄清 · 认知偏差 · 身份认同",
     signature_line: "这是你真正想要的，还是你害怕失去的？",
+    lens_title: "动机与冲突",
   },
   {
     id: "historian", display_name: "历史学家", color: "#7B6652", role: "历史分析", avatar_char: "史",
     model: "历史类比 · 基准概率 · 路径依赖",
     signature_line: "过去真的发生过同一件事吗？",
+    lens_title: "路径与规律",
   },
   {
-    id: "artist", display_name: "艺术家", color: "#86527D", role: "创意重构", avatar_char: "艺",
-    model: "问题重构 · 第三选项 · 意义建构",
-    signature_line: "如果不接受这个二选一，第三条路是什么？",
+    id: "mathematician", display_name: "数学家", color: "#6F4878", role: "决策科学", avatar_char: "数",
+    model: "决策理论 · 概率 · 敏感性分析",
+    signature_line: "改变哪个变量，会让答案反过来？",
+    lens_title: "变量与阈值",
   },
   {
-    id: "politician", display_name: "政治家", color: "#745B70", role: "博弈分析", avatar_char: "政",
-    model: "利益相关者 · 权力关系 · 谈判",
-    signature_line: "谁真正握有筹码，你还能谈什么？",
+    id: "strategist", display_name: "战略家", color: "#4E6E58", role: "行动顺序与退路", avatar_char: "略",
+    model: "行动顺序 · 选择权 · 低成本试错 · 退出机制",
+    signature_line: "在尚未完全确定时，怎样继续前进，同时避免过早失去退路？",
+    lens_title: "行动与退路",
+  },
+  {
+    id: "legal_scholar", display_name: "法学家", color: "#566573", role: "合同与权利边界", avatar_char: "法",
+    model: "合同条款 · 权利义务 · 程序与责任边界",
+    signature_line: "作出决定前，哪些权利、义务和文件必须确认？",
+    lens_title: "权利与边界",
+  },
+  {
+    id: "sociologist", display_name: "社会学家", color: "#8C6A4F", role: "关系与环境", avatar_char: "社",
+    model: "关系网络 · 组织规则 · 群体规范 · 社会资源",
+    signature_line: "这看似是个人选择，但有哪些关系和环境条件会共同决定结果？",
+    lens_title: "关系与环境",
+  },
+  {
+    id: "contrarian", display_name: "逆向思考者", color: "#276078", role: "挑战问题定义", avatar_char: "逆",
+    model: "隐藏前提 · 最强反方 · 第三方案 · 反事实",
+    signature_line: "如果现在问错了问题，正确的问题可能是什么？",
+    lens_title: "被忽略的可能",
   },
 ];
 
@@ -94,6 +130,17 @@ export const LEGACY_MEMBERS: Member[] = [
     id: "fan", display_name: "反对", color: "#5C3D6E", role: "反共识", avatar_char: "反",
     model: "逆向思考 · 流行偏见识别 · 边缘视角",
     signature_line: "这个共识里有没有盲点？历史什么时候被打脸？",
+  },
+  // V3 已删除的旧专家（历史议会 transcript 里仍会出现这两个 ID）
+  {
+    id: "artist", display_name: "艺术家", color: "#86527D", role: "创意重构", avatar_char: "艺",
+    model: "问题重构 · 第三选项 · 意义建构",
+    signature_line: "如果不接受这个二选一，第三条路是什么？",
+  },
+  {
+    id: "politician", display_name: "政治家", color: "#745B70", role: "博弈分析", avatar_char: "政",
+    model: "利益相关者 · 权力关系 · 谈判",
+    signature_line: "谁真正握有筹码，你还能谈什么？",
   },
 ];
 
@@ -155,15 +202,21 @@ export interface TranscriptEntry {
   speaker: MemberId | "system" | "user";
   round?: number;
   type:
-    | "research" | "debate" | "debate_error"
+    | "research" | "debate" | "debate_error" | "debate_degraded"
     | "election" | "summary" | "user_interrupt" | "user_clarification";
   stance?: Stance;
   content: string;
   evidence?: Evidence[];
   confidence?: number;
   position?: DecisionPosition;
+  /** 内部质量信号，V3 起前端不再显示（spec §14.2） */
   basis_level?: BasisLevel;
+  /** V3 前已废弃：仅历史议会数据还会带 */
   duty?: string;
+  /** V3 四段契约：专属栏目名（如"成本与回报"），与 content 内【】标题一致 */
+  lens_title?: string;
+  /** published entry 恒为 false；should_speak=false 的专家没有 transcript entry */
+  silent?: boolean;
   reply_to?: string;
   /** 群聊时间戳（前端渲染用，后端可选填） */
   timestamp?: string;
@@ -307,6 +360,7 @@ export type MemberStatus =
   | "organizing"
   | "speaking"
   | "done"
+  | "silent" // should_speak=false：本轮未发言（低相关或执行失败），不是 error
   | "degraded"
   | "error";
 
