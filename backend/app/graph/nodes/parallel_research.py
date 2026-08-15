@@ -539,22 +539,28 @@ def _render_public_research_statement(
     ]
     evidence_lines = _fmt_evidence(visible_records)
 
-    evidence_text = (
-        "\n".join(evidence_lines)
-        if evidence_lines
-        else "本轮没有获得可核验的外部来源，以下结论只使用用户信息与明确假设"
+    # P2: 0 证据时不再写免责声明句（用户体感差、零信息量）——直接给假设。
+    # P3: 证据区标题带职业视角签名（解决"看不出为什么这是政治家说的"）。
+    from app.agents.profiles import get_expert_profile as _get_profile
+    try:
+        _profile = _get_profile(result.agent_id)
+    except Exception:
+        _profile = None
+    perspective = (
+        _profile.analysis_methods[0] if _profile and _profile.analysis_methods else "专业分析"
     )
+
+    if evidence_lines:
+        evidence_text = "\n".join(evidence_lines)
+    else:
+        evidence_text = ""
     unknowns = [
         u for u in result.unknowns if u and "预算" not in u and "上限" not in u
     ]
-    # degraded 的内部 reason 不再进入用户可见文案——由下方固定降级说明替代
 
-    # 改造 4：6 段 → 4 段，密度优先于铺张结构。
-    # 把 assumptions 并入【依据】，key_risks 与 unknowns 合并到【风险与未知】，
-    # 去掉"下一步动作"段（移到纪要阶段处理），让单段发言更紧凑、更易读。
     if result.assumptions:
         assumption_text = f"\n核心假设：{_clean(_format_list(result.assumptions, ''))}"
-        evidence_text = evidence_text + assumption_text
+        evidence_text = (evidence_text + "\n" if evidence_text else "") + assumption_text.lstrip("\n")
 
     risk_pieces = [_clean(r) for r in result.key_risks if r]
     if unknowns:
@@ -564,14 +570,21 @@ def _render_public_research_statement(
 
     thesis_text = _clean(result.thesis.strip())
 
-    return "\n\n".join(
-        (
-            f"【我的判断】{stance_label}。{thesis_text}",
-            f"【关键依据】{evidence_text}",
-            f"【主要风险】{_format_list(risk_pieces, '关键下行风险仍需结合用户实际承受能力确认')}",
-            f"【什么时候我会改变判断】{_clean(_format_list(result.reversal_conditions, '关键条件发生实质变化时重新评估'))}",
-        )
-    )
+    # 反转条件若只是 profile 预置的模板占位问题（fallback 未定制），整段省略——
+    # 渲染"题目是否被错误地限制成二选一？"这种句子对用户零价值。
+    reversal_items = [
+        c for c in result.reversal_conditions
+        if c and c.strip() and "?" not in c and "？" not in c
+    ] if result.degraded else [c for c in result.reversal_conditions if c and c.strip()]
+
+    sections = [
+        f"【我的判断 · {perspective}】{stance_label}。{thesis_text}",
+        f"【关键依据】{evidence_text}" if evidence_text else "",
+        f"【主要风险】{_format_list(risk_pieces, '关键下行风险仍需结合用户实际承受能力确认')}",
+        f"【什么时候我会改变判断】{_clean(_format_list(reversal_items, '关键条件发生实质变化时重新评估'))}"
+        if reversal_items else "",
+    ]
+    return "\n\n".join(s for s in sections if s)
 
 
 async def _parallel_agent_research(state: dict) -> dict:

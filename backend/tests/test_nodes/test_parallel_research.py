@@ -165,12 +165,14 @@ def test_public_research_statement_combines_structured_analysis():
     )
 
     for heading in (
-        "【我的判断】",
+        "【我的判断",          # P3 后带视角后缀：【我的判断 · 机会成本】
         "【关键依据】",
         "【主要风险】",
         "【什么时候我会改变判断】",
     ):
         assert heading in content
+    # 视角签名必须在（解决"看不出是哪个职业在说话"）
+    assert " · " in content.split("】")[0]
     # 4 段压缩后不再出现的旧标题（验证确实合并了）
     assert "【我最担心的地方】" not in content
     assert "【当前假设与未知】" not in content

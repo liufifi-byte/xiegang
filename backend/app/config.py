@@ -59,9 +59,10 @@ class Settings(BaseSettings):
     # 改 2 覆盖大多数场景，同时不至于显著拖累总耗时。
     agent_max_tool_calls: int = 2
     agent_tool_timeout_seconds: int = 15
-    # 单 Agent 总超时。120s 不够 ReAct 多步推理 + GLM 慢响应场景，
-    # 经常砍断单 Agent → 写"未完成"文案。改 180s 给复杂议题留余量。
-    agent_total_timeout_seconds: int = 180
+    # 单 Agent 总超时。线上实测：3/5 专家贴着 180s 整被时间砍断（工具调满、
+    # 证据拿到 3 条仍差最后 finalize）——GLM 5 步推理 + 2 工具 ~200s 是常态。
+    # 240s 留余量；议会总预算 1200s 仍足够（research 最慢 240 + 辩论 350 + 其他 200）。
+    agent_total_timeout_seconds: int = 240
     agent_research_node_timeout_seconds: int = 135
     agent_max_observation_chars: int = 4000
     agent_max_evidence: int = 3

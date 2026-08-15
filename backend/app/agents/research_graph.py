@@ -35,41 +35,41 @@ def _evidence_backed_fallback(
     harness: AgentHarness,
     reason: str,
 ) -> ExpertResearchResult:
-    """当 ReAct 因预算 / 超时未跑完时，基于已收集证据产出降级结论。
+    """当 ReAct 因预算 / 超时未跑完时，产出职业视角的方向性判断。
 
-    P0 修订：
-    - reason 字符串不再写入 unknowns（避免内部错误码"Agent 总运行时间已达上限"
-      泄露到用户文案）。unknowns 改成用户友好的中文提示。
-    - thesis 不再写"本轮未获得足够的可验证资料"这种空话——改成基于 evidence_count
-      的真实降级表态，让读者能据此读出可信度上限。
+    P0 修订（第二轮 review）：
+    - thesis 绝不引用证据原文——之前"基于已收集的 N 项可核验信息（原文前100字）"
+      把网页口语化文本直接塞进判断段落，与下方【关键依据】整段重复，观感灾难。
+      现在 thesis 只写职业视角的方向性结论，证据一律由渲染层在证据区展示。
+    - 用户可见 unknown 不暴露 reason 字面值；内部 reason 只进 degradation_reason。
     """
     records = harness.ledger.records
     evidence_refs = [record.evidence_id for record in records[:3]]
     evidence_count = len(records)
 
-    # 用户友好的 unknown（不再暴露 reason 字面值）。
-    # 真实 reason 仍保留在 degradation_reason 字段供日志 / 调试。
+    # 用户友好的 unknown（不暴露 reason 字面值）。
     user_facing_unknown = (
         "受本次调研步骤预算或时间限制，未能完成全面取证；"
         "建议读者把以下判断视为初步结论而非完整推理。"
+    ) if evidence_count == 0 else (
+        "调研在收尾阶段受限，部分判断基于不完全证据，请与其他专家交叉比对。"
     )
 
-    if records:
-        evidence_summary = "；".join(
-            record.claim_summary[:100] for record in records[:2]
-        )
+    method = profile.analysis_methods[0] if profile.analysis_methods else "专业分析"
+    if evidence_count:
+        # 有部分证据：写职业视角的方向性判断，不引用原文
         thesis = (
-            f"基于已收集的 {evidence_count} 项可核验信息（{evidence_summary}），"
-            f"我从{profile.analysis_methods[0]}视角的初步判断如上。"
-            f"由于本轮受预算限制未能完成完整调研，请你把这条判断视为方向性参考，"
-            f"而非完整结论。"
+            f"我从{method}视角看，当前信号更倾向于谨慎：已核验的 {evidence_count} 项信息"
+            f"（见下方依据区）尚未支撑一个高置信结论。"
+            f"若你最看重的变量是{'、'.join(profile.required_questions[:1]) or '核心条件'}，"
+            f"请把它补全后再比较两个选项的期望值。"
         )
         confidence = 0.45
     else:
         thesis = (
-            f"本轮受步骤预算或时间限制，未收集到可核验的外部资料。"
-            f"我从{profile.analysis_methods[0]}视角默认保持中立——"
-            f"在你补充最影响结论的事实后，我的判断可能显著改变。"
+            f"本轮未能完成取证，我基于你提供的信息从{method}视角只能给出方向性参考："
+            f"在你补齐{'、'.join(profile.required_questions[:2]) or '关键事实'}之前，"
+            f"任何一边的强结论都为时过早。"
         )
         confidence = 0.25
 

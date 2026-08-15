@@ -58,18 +58,12 @@ def test_render_drops_old_section_headers():
 
 
 def test_render_keeps_four_new_headers():
-    """新版本 4 个段标题应正确出现。
-
-    P0 渲染统一后段名与辩论轮对齐：【关键依据】【主要风险】（原【最关键的依据】【风险与未知】）。
-    """
+    """新版本段标题（P3 后判断段带视角签名后缀，用包含匹配）。"""
     out = _render_public_research_statement(_make_result(), _EVIDENCE)
-    for header in (
-        "【我的判断】",
-        "【关键依据】",
-        "【主要风险】",
-        "【什么时候我会改变判断】",
-    ):
-        assert header in out, f"新标题缺失: {header}"
+    assert "【我的判断" in out          # · 视角签名跟在后面
+    assert "【关键依据】" in out
+    assert "【主要风险】" in out
+    assert "【什么时候我会改变判断】" in out
 
 
 def test_render_merges_assumptions_into_evidence():
@@ -90,9 +84,12 @@ def test_render_merges_risks_and_unknowns_into_one():
 
 
 def test_render_works_without_evidence_records():
-    """没有 evidence 时也不应崩，fallback 文案应在。"""
+    """P2 后：0 证据不再写免责声明句——证据段直接显示核心假设。"""
     out = _render_public_research_statement(_make_result(evidence_refs=[]), [])
-    assert "本轮没有获得可核验的外部来源" in out
+    # 免责句已删（用户体感差、零信息量）
+    assert "本轮没有获得可核验的外部来源" not in out
+    # 假设仍在（信息量保留）
+    assert "核心假设" in out
 
 
 def test_render_handles_degraded_result():

@@ -257,16 +257,18 @@ def is_recruit_spam(item: dict) -> bool:
 
 
 def _smart_truncate(text: str, limit: int = 80) -> str:
-    """优先在句号/分号处截断的智能摘要。"""
+    """优先在句号/分号处截断的智能摘要（避免"依据，"这类词中残句）。"""
     text = (text or "").strip()
     if len(text) <= limit:
         return text
     head = text[:limit]
+    # 依次找最近的完整句读边界（句号 > 分号 > 逗号 > 顿号）
     for sep in ("。", "；", "，", "、"):
         idx = head.rfind(sep)
         if idx > limit // 2:
             return head[: idx + 1]
-    return head + "…"
+    # 没有任何边界（口语化长句）：切到词边界不现实，直接截 + 省略号
+    return head.rstrip("，。；、依据 ") + "…"
 
 
 def domain_of(url: str) -> str:
