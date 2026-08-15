@@ -269,6 +269,20 @@ async def assess_clarification_need(state: dict) -> dict:
             "clarification_reason": "本场信息门槛已经处理",
         }
 
+    # P0 修复：会前两步流（decision path setup）已确认过的议会不再追问。
+    # 之前 bug：setup 弹窗收集的答案写入了 parliaments.decision_path
+    # （decision_path_status=confirmed），worker 也把它塞进了 state，
+    # 但本节点从不读它——LLM 又生成一批内容重复的 user_only 问题，
+    # 用户在 setup 两步流之后第三次看到同题弹窗。
+    if state.get("decision_path_status") == "confirmed" and state.get(
+        "decision_path"
+    ):
+        return {
+            "clarification_status": "not_needed",
+            "clarification_questions": [],
+            "clarification_reason": "决策路径两步流已在会前收集关键信息，无需重复追问",
+        }
+
     prompt = CLARIFICATION_PROMPT.format(
         topic=state.get("topic") or "",
         background=state.get("user_background") or "（用户未提供额外背景）",
