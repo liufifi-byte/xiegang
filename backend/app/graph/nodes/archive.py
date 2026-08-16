@@ -87,7 +87,11 @@ def run_archive(state: dict) -> dict:
 
         if new_memory_id and topic_embedding is not None:
             # 用裸 psycopg 把 vector 写进去（postgrest-2.4 不支持 vector 类型传值）
-            _update_embedding_via_pgsql(new_memory_id, topic_embedding)
+            # 回写失败只丢 embedding（降级为时间序兜底检索），不能毒化整个 archive
+            try:
+                _update_embedding_via_pgsql(new_memory_id, topic_embedding)
+            except Exception as emb_err:
+                print(f"[archive] embedding 回写失败（记忆行已写入）: {emb_err}")
 
         if state.get("started_at"):
             duration = int(time.time() - state["started_at"])
@@ -100,6 +104,17 @@ def run_archive(state: dict) -> dict:
         }
 
     except Exception as e:
+        # 观测性修复（议会 c7076b17 排查）：archive 的失败此前只进 state 不落库，
+        # 议会显示 done 但 user_memories 静默缺失。失败原因持久化到行上 +
+        # 打完整 traceback 进容器日志，两处都能查。
+        import traceback
+        traceback.print_exc()
+        try:
+            supabase.table("parliaments").update(
+                {"error_message": f"archive failed: {e}"}
+            ).eq("id", parliament_id).execute()
+        except Exception:
+            pass
         return {
             "finished_at": time.time(),
             "error_message": f"archive failed: {e}",
