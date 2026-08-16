@@ -55,7 +55,12 @@ class Settings(BaseSettings):
     rate_limit_device_daily: int = 10  # 单 device 每天议会数
 
     # P0-S1.4 CORS
-    cors_origins: str = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001"
+    # 生产前端在 Vercel（https://www.liuuuu.xyz），必须进白名单否则浏览器跨域全挂
+    cors_origins: str = (
+        "http://localhost:3000,http://localhost:3001,"
+        "http://127.0.0.1:3000,http://127.0.0.1:3001,"
+        "https://www.liuuuu.xyz,https://liuuuu.xyz"
+    )
 
     # 议会总超时（秒）。完整议会跑 5 Agent research + 3 轮 debate + 选举 + 总结
     # 实测稳定 runtime 是 14-20 分钟，720s 不够经常 fail。改 1200s 留充分余量。
