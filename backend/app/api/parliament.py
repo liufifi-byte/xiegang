@@ -52,6 +52,22 @@ def _worker_available() -> bool:
         return False
 
 
+def _uuid_or_none(value: str | None) -> str | None:
+    """device_id 是合法 UUID 才能落 user_id（user_memories.user_id 是 uuid 列）。
+
+    浏览器前端发的 X-Device-Id 是 UUID；ip:1.2.3.4 这类 fallback 设备标识
+    不是 UUID，宁可留 None（memory_search 不下发）也不能炸 insert。
+    """
+    if not value:
+        return None
+    try:
+        import uuid as _uuid
+
+        return str(_uuid.UUID(value))
+    except (ValueError, AttributeError):
+        return None
+
+
 @router.post("")
 async def create_parliament(req: CreateParliamentRequest, request: Request) -> dict:
     """创建议会，返回议会 ID 和 SSE 流 URL。
@@ -152,7 +168,9 @@ async def create_parliament(req: CreateParliamentRequest, request: Request) -> d
         "topic": req.topic,
         "topic_category": req.topic_category,
         "user_background": req.user_background,
-        "user_id": req.user_id,
+        # V2-S3 补全：user_id 缺省回落到设备 UUID——跨议会记忆（memory_search
+        # 的下发条件 + user_memories 的读写键）从此对浏览器用户默认生效。
+        "user_id": req.user_id or _uuid_or_none(device_id),
         "device_id": device_id,  # P0-S2: 所有权校验用
         "status": "queued",     # P0-S2: Worker 抢任务用
         "members_state": {},

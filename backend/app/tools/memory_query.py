@@ -1,6 +1,9 @@
 """跨议会记忆查询：从 Supabase pgvector 检索相似历史议会。
 
 V2-S3: 真用 GLM embedding-3 + pgvector 余弦相似度检索。
+V2-S3b: 检索按 user_id 隔离（RPC 加 filter_user_id 参数，兜底路径 eq 过滤）。
+         此前按 category 全局检索是单用户时代的临时设计——多用户下等于
+         跨用户记忆泄漏；且"先 LIMIT 再在应用层过滤"会挤掉自己的行。
 """
 from app.embedding import embed_query_sync
 
@@ -29,6 +32,23 @@ def _format_memories_for_prompt(rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _rpc_params(
+    query_vec: list[float],
+    limit: int,
+    topic_category: str | None,
+    user_id: str | None,
+) -> dict:
+    """match_user_memories 的调用参数（sync/async 共用，保证两路一致）。"""
+    return {
+        "query_embedding": query_vec,
+        "match_count": limit,
+        "filter_category": topic_category if topic_category else None,
+        # 老版本 RPC 没这个参数也不报错（Postgres 多余命名参数会被忽略…实际会
+        # 报错，故依赖 DB 侧已 CREATE OR REPLACE 升级；兜底路径有 eq 过滤）。
+        "filter_user_id": user_id if user_id else None,
+    }
+
+
 def memory_query(
     user_id: str,
     topic_category: str,
@@ -38,11 +58,10 @@ def memory_query(
     """同步检索相似历史议会，返回 prompt 文本。
 
     Args:
-        user_id: 现在所有议会都共用一个 anonymous user_id = None 或者 "anon"
-                 V2 阶段先按 category 检索不按 user（单用户产品）
+        user_id: 记忆归属键（议会行的 user_id，浏览器用户 = 设备 UUID）。
+                 None/空 = 不带 user 过滤（等价旧行为，仅限无用户上下文场景）。
         topic_category: 议题类别 real_estate / gold / ...
         query_text: 当前议题原文（用来算 embedding）
-                    如果传 None 就退回到前几天一样按时间倒叙检索
         limit: 最多返回几条
 
     Returns:
@@ -60,30 +79,25 @@ def memory_query(
         print(f"[memory_query] embedding 失败: {e}")
         return _format_memories_for_prompt([])
 
-    # 2. pgvector 余弦相似度检索
+    # 2. pgvector 余弦相似度检索（DB 侧按 user_id 隔离）
     try:
         from app.db import get_supabase
         supabase = get_supabase()
-        # Supabase rpc 调用：match_user_memories
-        # 用裸 SQL render 避开 rpc 函数定义
-        # 这里直接调 .rpc() 假设已建；如果不行就 fallback
         result = supabase.rpc(
             "match_user_memories",
-            {
-                "query_embedding": query_vec,
-                "match_count": limit,
-                "filter_category": topic_category if topic_category else None,
-            },
+            _rpc_params(query_vec, limit, topic_category, user_id),
         ).execute()
         rows = result.data or []
         return _format_memories_for_prompt(rows)
     except Exception as e:
-        # 兜底：按 category 时间倒序拿最近 N 条
+        # 兜底：按 user + category 时间倒序拿最近 N 条
         print(f"[memory_query] pgvector 检索失败: {e}")
         try:
             from app.db import get_supabase
             supabase = get_supabase()
             query = supabase.table("user_memories").select("*")
+            if user_id:
+                query = query.eq("user_id", user_id)
             if topic_category:
                 query = query.eq("topic_category", topic_category)
             result = query.order("created_at", desc=True).limit(limit).execute()
@@ -113,20 +127,13 @@ async def memory_query_async(
     try:
         from app.db import get_supabase
         supabase = get_supabase()
+        params = _rpc_params(query_vec, limit, topic_category, user_id)
+
         def fetch():
-            return supabase.rpc(
-                "match_user_memories",
-                {
-                    "query_embedding": query_vec,
-                    "match_count": limit,
-                    "filter_category": topic_category if topic_category else None,
-                },
-            ).execute()
+            return supabase.rpc("match_user_memories", params).execute()
+
         result = await asyncio.to_thread(fetch)
         rows = result.data or []
-        # Agent 工具必须用户隔离。RPC 暂未接受 user_id 时，在结果进入模型前过滤。
-        if user_id:
-            rows = [row for row in rows if str(row.get("user_id") or "") == str(user_id)]
         return _format_memories_for_prompt(rows)
     except Exception as e:
         print(f"[memory_query_async] pgvector 检索失败: {e}")
