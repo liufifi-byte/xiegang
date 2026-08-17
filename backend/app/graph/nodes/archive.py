@@ -73,7 +73,9 @@ def run_archive(state: dict) -> dict:
 
         memory_row = {
             "parliament_id": parliament_id,
-            "user_id": state.get("user_id"),
+            # 防御：state 里的 user_id 可能是 psycopg 返回的 UUID 对象
+            # （REST 序列化会炸），统一转 str
+            "user_id": str(state["user_id"]) if state.get("user_id") else None,
             "topic_category": state.get("category", "general"),
             "topic_summary": topic_text,
             "members_stances": state.get("members", {}),

@@ -379,6 +379,16 @@ async def fetch_next_queued_parliament() -> dict | None:
                     "transcript",
                 ]
                 task = dict(zip(cols, row))
+                # psycopg 把 uuid 列返回 Python UUID 对象；state 里一律转 str，
+                # 否则流进 supabase REST 的 JSON body 会
+                # "Object of type UUID is not JSON serializable"（议会 4b2e4dc3 实锤：
+                # user_id 非空后 archive 写 user_memories 静默失败）
+                import uuid as _uuid
+
+                for key in ("id", "user_id"):
+                    value = task.get(key)
+                    if isinstance(value, _uuid.UUID):
+                        task[key] = str(value)
                 cur.execute(
                     """UPDATE parliaments
                        SET status = 'running',
