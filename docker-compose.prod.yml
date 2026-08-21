@@ -41,6 +41,8 @@ services:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       # 把项目里的 nginx/certs 目录挂进容器(证书已经在里面了, perms 644)
       - ./nginx/certs:/etc/nginx/certs:ro
+      # certbot ACME HTTP-01 验证目录（switch-domain.sh 用）
+      - ./nginx/certbot-www:/var/www/certbot:ro
       - ./nginx/logs:/var/log/nginx
     networks:
       - xiegang-net
