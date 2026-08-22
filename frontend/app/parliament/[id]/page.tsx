@@ -19,6 +19,8 @@ import {
   submitClarification,
 } from "@/lib/api";
 import { subscribeParliament } from "@/lib/sse";
+import { HarnessFeed, type HarnessFeedItem } from "@/components/council/HarnessFeed";
+import { HARNESS_EVENT_TYPES, describeHarnessEvent } from "@/lib/harnessEvents";
 import {
   AgentTraceEvent,
   ClarificationQuestion,
@@ -35,6 +37,8 @@ export default function ParliamentPage() {
   const parliamentId = params.id as string;
 
   const [topic, setTopic] = useState("");
+  // V4 harness（§15.1）事件流：新 runtime 事件的用户语言卡片
+  const [harnessItems, setHarnessItems] = useState<HarnessFeedItem[]>([]);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [toolCalls, setToolCalls] = useState<any[]>([]);
   const [selectedExpertIds, setSelectedExpertIds] = useState<MemberId[]>([]);
@@ -187,6 +191,37 @@ export default function ParliamentPage() {
     const unsubscribe = subscribeParliament(
       parliamentId,
       (event) => {
+        // V4 harness 事件（§15.1 白名单）：翻译成用户语言，不进旧管线
+        if (HARNESS_EVENT_TYPES.has(event.type || "")) {
+          if (describeHarnessEvent(event)) {
+            setHarnessItems((cur) => [
+              ...cur,
+              { type: event.type!, seq: event.seq, payload: event.payload },
+            ]);
+          }
+          if (event.type === "user_input_requested") {
+            const raw = Array.isArray(event.payload?.questions)
+              ? (event.payload!.questions as string[])
+              : [];
+            const questions = (raw.length
+              ? raw
+              : ["请补充会改变建议的关键信息。"]
+            ).map((q, i) => ({
+              id: `harness-q-${i}`,
+              question: q,
+              why_it_matters: "这个信息会影响最终建议的方向。",
+              answer_type: "short_text" as const,
+              options: [],
+              impact: "high" as const,
+              source: "user_only" as const,
+            }));
+            setClarificationQuestions(questions);
+            setStatus("awaiting_input");
+            setServerPhase("awaiting_input");
+          }
+          return;
+        }
+
         if (event.type === "parliament_started") {
           setStatus("running");
           setServerPhase("claimed");
@@ -770,6 +805,7 @@ export default function ParliamentPage() {
         </header>
 
         <CouncilPhaseBar phase={phase} />
+        {harnessItems.length > 0 && <HarnessFeed items={harnessItems} />}
         <ExpertSeatPanel
           compact
           expertIds={selectedExpertIds}
