@@ -240,7 +240,9 @@ class ResearchLead:
                     break
 
             for i, hit in enumerate(selected, start=1):
-                evidence_id = f"ev-{claim.claim_id}-{i}"
+                # run 前缀保证全局唯一（evidence_records.id 是全局 TEXT 主键，
+                # 跨场同 ID 会撞 pkey——批量彩排实测三连翻车点）；场内确定性幂等
+                evidence_id = f"ev-{self.run_id[:8]}-{claim.claim_id}-{i}"
                 fetched = await self.provider.fetch(hit.url)
                 record = EvidenceRecordV4(
                     id=evidence_id,

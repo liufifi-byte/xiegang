@@ -146,10 +146,18 @@ def _normalize_plan_body(payload: dict) -> dict:
     # objective 防御：去空白 + 截到契约上限
     objective = str(body.get("objective") or "").strip()
     body["objective"] = objective[:300]
+    def _item_text(x):
+        """未知项可能是 {id, description} 对象（真跑实测）——取人话字段，
+        不把原始 dict 字符串泄漏进用户可见清单。"""
+        if isinstance(x, dict):
+            return str(x.get("description") or x.get("question")
+                       or x.get("label") or x.get("id") or "")[:200]
+        return str(x)[:200]
+
     for list_field in ("blocking_unknowns", "non_blocking_unknowns", "stop_conditions",
                        "expected_conflicts"):
         raw = body.get(list_field) or []
-        body[list_field] = [str(x) for x in raw][:10]
+        body[list_field] = [_item_text(x) for x in raw if _item_text(x)][:10]
     return body
 
 
