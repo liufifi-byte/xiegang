@@ -30,7 +30,7 @@ export function DecisionPathModal({ open, topic, topicCategory, userBackground, 
   const [step, setStep] = useState<ModalStep>("confirm_task");
   const [preview, setPreview] = useState<DecisionPathPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [agreed, setAgreed] = useState<"confirmed" | "adjust" | null>(null);
+  const [editingBrief, setEditingBrief] = useState(false);
   const [briefFeedback, setBriefFeedback] = useState("");
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -45,7 +45,7 @@ export function DecisionPathModal({ open, topic, topicCategory, userBackground, 
     setStatus("generating");
     setStep("confirm_task");
     setError(null);
-    setAgreed(null);
+    setEditingBrief(false);
     setBriefFeedback("");
     setAnswers({});
     setQuestionIndex(0);
@@ -74,7 +74,7 @@ export function DecisionPathModal({ open, topic, topicCategory, userBackground, 
       const validIds = new Set(response.questions.map((question) => question.id));
       setAnswers((current) => Object.fromEntries(Object.entries(current).filter(([id]) => validIds.has(id))));
       setQuestionIndex(0);
-      setAgreed(null);
+      setEditingBrief(false);
       setStatus("ready");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -109,8 +109,11 @@ export function DecisionPathModal({ open, topic, topicCategory, userBackground, 
     }
   }
 
+  // 存在尚未应用的非空修改内容：必须先重新梳理（或清空）才能继续
+  const hasPendingBriefFeedback = editingBrief && briefFeedback.trim().length > 0;
+
   function continueToQuestions() {
-    if (!preview || agreed !== "confirmed") return;
+    if (!preview || hasPendingBriefFeedback) return;
     if (preview.questions.length === 0) {
       void handleConfirmCreate();
       return;
@@ -130,12 +133,15 @@ export function DecisionPathModal({ open, topic, topicCategory, userBackground, 
     setPreview(null);
     setGenerationId(null);
     setError(null);
+    setEditingBrief(false);
     onClose();
   }
 
   if (!open) return null;
 
   const busy = status === "generating" || status === "revising" || status === "creating_meeting";
+  // 第一步主按钮的禁用条件（§5.3）：正在重新梳理/正在创建会议时不可继续
+  const actionBusy = status === "revising" || status === "creating_meeting";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#10233b]/45 px-3 py-4 backdrop-blur-sm sm:px-4" role="dialog" aria-modal="true" aria-labelledby="decision-path-title">
@@ -143,7 +149,7 @@ export function DecisionPathModal({ open, topic, topicCategory, userBackground, 
         <header className="shrink-0 border-b border-[#e6eaf0] bg-white px-5 py-4 sm:px-7">
           <p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-[#607692]">Decision room · 会前确认</p>
           <h2 id="decision-path-title" className="mt-1 text-lg font-bold text-[#172d4d] sm:text-xl">确认本次决策任务</h2>
-          <p className="mt-1 text-xs text-[#718096]">只补充会明显改变结论的信息</p>
+          <p className="mt-1 text-xs text-[#718096]">请快速确认讨论方向，信息不准确时可以直接修改</p>
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-7">
@@ -151,7 +157,20 @@ export function DecisionPathModal({ open, topic, topicCategory, userBackground, 
             <div className="py-16 text-center"><div className="mx-auto h-9 w-9 animate-spin rounded-full border-2 border-[#dce4ed] border-t-[#172d4d]" /><p className="mt-4 text-sm text-[#718096]">{status === "creating_meeting" ? "正在创建会议…" : status === "revising" ? "正在重新梳理任务…" : "正在梳理本次决策任务…"}</p></div>
           )}
           {preview && step === "confirm_task" && (status === "ready" || status === "create_failed") && (
-            <TaskConfirmationStep preview={preview} agreed={agreed} briefFeedback={briefFeedback} error={error} onAgree={setAgreed} onFeedbackChange={setBriefFeedback} onRegenerate={() => void regenerateWithFeedback()} onContinue={continueToQuestions} onBack={handleClose} maxFeedback={MAX_BRIEF_FEEDBACK} />
+            <TaskConfirmationStep
+              preview={preview}
+              editingBrief={editingBrief}
+              briefFeedback={briefFeedback}
+              error={error}
+              hasPendingBriefFeedback={hasPendingBriefFeedback}
+              busy={actionBusy}
+              onEditingChange={setEditingBrief}
+              onFeedbackChange={setBriefFeedback}
+              onRegenerate={() => void regenerateWithFeedback()}
+              onContinue={continueToQuestions}
+              onBack={handleClose}
+              maxFeedback={MAX_BRIEF_FEEDBACK}
+            />
           )}
           {preview && step === "answer_questions" && (status === "ready" || status === "create_failed" || status === "creating_meeting") && (
             <DecisionQuestionsStep questions={preview.questions} index={questionIndex} answers={answers} error={error} onChange={setAnswer} onBack={() => setStep("confirm_task")} onNext={() => setQuestionIndex((current) => Math.min(current + 1, preview.questions.length - 1))} onUnknown={handleUnknown} onCreate={() => void handleConfirmCreate()} onClose={handleClose} creating={status === "creating_meeting"} />
