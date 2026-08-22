@@ -100,7 +100,8 @@ parse_topic
 - 不用多数投票替代证据和专业相关性；
 - 不在第一阶段删除 LangGraph、现有专家 Profile 或现有 API；
 - 不在第一阶段做外部写操作，例如代替用户签约、发邮件或执行交易；
-- 不以 Fork Codex Rust 源码作为主要集成方式。
+- 深墨维护一个固定版本的 Codex 下游 Fork 作为 Agent Runtime 内核；领域能力优先通过
+  扩展点实现，不以散改 Codex Core 作为主要集成方式（详见 `docs/adr/ADR-codex-downstream-harness.md`）。
 
 ---
 
@@ -782,17 +783,35 @@ claim_id → evidence_id → source_url / user_fact / calculation
 
 ## 13. Codex Harness 接入方案
 
-### 13.1 选择 App Server，而不是 Fork
+### 13.1 以下游 Fork 为内核，扩展点优先
 
-采用 Codex App Server/Python SDK：
+> 深墨维护一个固定版本的 Codex 下游 Fork，以 Codex Harness 作为 Agent Runtime 内核。
+> 领域能力优先通过扩展点实现，必要的 Core Patch 单独记录，并建立 upstream 同步和回归测试机制。
 
-- Python 后端可以直接控制 Thread；
-- Root Thread 可恢复；
-- Turn/Item 事件可映射到现有事件流；
-- 支持中断、审批和上下文压缩；
-- 保持上游升级能力。
+- 内核能力（Thread/Turn/Item、Agent Loop、Tool Runtime、Compaction、Sandbox/Approval、
+  Interrupt/Resume、事件流、错误恢复）由 Fork 提供，保持与上游一致；
+- 深墨能力落点：`codex-rs/ext/decision-expert/`（ToolContributor/ContextContributor/
+  TurnLifecycleContributor）+ skills/hooks/agent role + 产品仓库 Adapter；
+- Python SDK 经 `CodexConfig.codex_bin + config_overrides` 指向自建二进制；
+- 源码勘察证据与复用/扩展/改 Core 三分类见 `docs/codex-harness-inventory.md`；
+- Fork 边界、同步、回滚、版本固定见 `docs/adr/ADR-codex-downstream-harness.md`。
 
-不 Fork Codex Rust 源码。若某项能力不足，优先在 Domain Harness、MCP Tool 或 Adapter 中补充。
+### 13.1.1 下游 Fork 运营要点
+
+- **仓库关系**：`upstream → openai/codex`（只读）；深墨 Fork 远端待建；
+  产品仓库以 `backend/app/decision_harness/CODEX_FORK_PIN` 记录依赖的 fork commit
+  （SHA + 上游 tag + 日期），与产品版本在同一提交中映射。
+- **Core Patch 清单**：初始为空；确需改 core 时以 `patches/shenmo/*.patch` 维护并逐条
+  记入 inventory §13，合并 upstream 时重放。
+- **自定义 Runtime 构建部署**：`cargo build -p codex-app-server`（release 走
+  `just build-for-release`）；产物随 worker 镜像分发，`codex_bin` 指向自建二进制；
+  工具链钉死 `rust-toolchain.toml`（1.95.0）。
+- **upstream 合并流程**：只合并 `rust-v*.*.*` release tag（不追 main HEAD）；
+  冲突高发区预检（app-server-protocol/common.rs、protocol.rs、spec_plan.rs、ext/、MCP 系）；
+  重放 patch 清单。
+- **升级回归测试**：cargo check + app-server 握手冒烟 + 协议 schema 快照 diff
+  （非新增类变更先升级产品侧 event_bridge/SDK 模型）+ `pytest tests/decision_harness/`
+  + 端到端 Fake/真二进制双跑。
 
 ### 13.2 Runtime Adapter
 
@@ -1235,6 +1254,24 @@ DECISION_RUNTIME_MODE=legacy|shadow|codex_harness
 ---
 
 ## 20. 分阶段实施计划
+
+### Phase -1：Codex Harness 源码勘察
+
+目标：在改动任何业务代码前，基于固定 commit 实读上游源码，固定 Fork 基线与扩展边界。
+
+任务：
+
+1. 克隆 openai/codex，记录并固定 commit SHA（勘察锚点 `343074d420`，2026-08-22；
+   正式落地前改锚最近的 `rust-v*.*.*` release tag）；
+2. 实读 Agent Loop、Thread/Turn/Item、Tool Runtime、Compaction、Subagent、
+   App Server 协议、Approval/Sandbox、Interrupt/Resume、Provider 配置、事件链路；
+3. 产出 `docs/codex-harness-inventory.md`（17 节）与
+   `docs/adr/ADR-codex-downstream-harness.md`；
+4. 验证构建链（rustup + 钉死工具链 + `cargo check` + 二进制握手冒烟）；
+5. 输出 Core Patch 候选清单（初始为空）与推荐扩展目录。
+
+验收：勘察文档齐备、构建验证通过、暂停等待确认后才进入正式编码。
+（状态：已完成，2026-08-22。）
 
 ### Phase 0：契约与基线
 

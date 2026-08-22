@@ -1,0 +1,10 @@
+# 深墨 Codex Fork 版本钉子（由 ADR-codex-downstream-harness §6 定义）
+# 产品仓库通过此文件记录依赖的 codex-fork commit；部署脚本读取并校验。
+# 更新规则：与产品版本映射在同一提交中变更（见 ADR §10）。
+
+codex_fork_commit=343074d4207d572809bd8cea15f4be1d09d98e0b
+upstream_tag=(勘察锚点，main HEAD；正式落地前改锚最近 rust-v*.*.* release tag)
+pinned_date=2026-08-22
+rust_toolchain=1.95.0
+python_sdk=openai-codex==0.147.0
+verification=cargo check -p codex-app-server OK (4m21s); cargo build OK (debug=0, 7m51s); stdio initialize handshake OK
