@@ -113,6 +113,12 @@ async def run_shadow(
         async for _ in wf.run():
             pass
         if wf.outcome and wf.outcome.plan is not None:
+            # Phase 4 研究阶段：claim 驱动真搜索 → Evidence Kernel 闸门
+            # （自媒体→线索不立据；过期→拒绝；专家只见可用证据摘要）
+            from app.decision_harness.research_lead import LegacyWebSearchProvider
+
+            async for _ in wf.run_research(provider=LegacyWebSearchProvider()):
+                pass
             async for _ in wf.run_experts():
                 pass
             async for _ in wf.run_debate():

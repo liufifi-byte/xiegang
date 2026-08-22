@@ -112,3 +112,10 @@ CREATE TABLE IF NOT EXISTS debate_issues (
   updated_at TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_debate_issues_run ON debate_issues(decision_run_id);
+
+-- 幂等唯一索引（Phase 4/彩排实测补）：upsert ON CONFLICT 依赖；
+-- agent_runs/evidence 的逻辑键是 (decision_run_id, id)，跨 run 不冲突。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_runs_run_and_id
+  ON agent_runs(decision_run_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_evidence_records_run_and_id
+  ON evidence_records(decision_run_id, id);

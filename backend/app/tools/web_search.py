@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import re
 import logging
 from datetime import date
 from urllib.error import HTTPError, URLError
@@ -28,13 +29,39 @@ class WebSearchError(RuntimeError):
     """Raised when the independent search service cannot return valid results."""
 
 
-def _parse_publish_year(value) -> int | None:
+_CONTENT_DATE_RE = re.compile(
+    r"(?:发布时间|发表于|published)[:：\s]*([12]\d{3})[-/年.]"
+    r"|\(([12]\d{3})[-/.]|\b([12]\d{3})[-/年](?:[01]?\d|一|二|三|四|五|六|七|八|九|十)"
+)
+
+
+def _year_from_content(content: str) -> int | None:
+    """正文兜底抠年份：自媒体常把"发布时间：2023-09-19"写进正文而不给字段。
+
+    没有这个兜底，旧帖会以"无日期"身份绕过 require_fresh 过滤
+    （2026-08-22 用户实测跳槽议题混入 2021/2023 老帖的直接原因）。
+    """
+    if not content:
+        return None
+    m = _CONTENT_DATE_RE.search(content[:400])
+    if not m:
+        return None
+    for group in m.groups():
+        if group:
+            try:
+                return int(group)
+            except ValueError:
+                continue
+    return None
+
+
+def _parse_publish_year(value, content: str = "") -> int | None:
     """从 GLM 返回的 publish_date 中抠出年份。容错：坏格式/None 返回 None。"""
     if not value:
-        return None
+        return _year_from_content(content)
     text = str(value).strip()
     if not text:
-        return None
+        return _year_from_content(content)
     # GLM 常见格式: "2026-07-31..." / "2026年7月31日..." / "2026/07/31"
     for sep in ("-", "/", "年", " ", "T"):
         head = text.split(sep, 1)[0]
@@ -132,7 +159,7 @@ def web_search(
                 "media": str(item.get("media") or ""),
                 "publish_date": publish_date_raw,
                 "source_grade": classify_source(url),  # trusted/media/blog
-                "_publish_year": _parse_publish_year(publish_date_raw),
+                "_publish_year": _parse_publish_year(publish_date_raw, content),
             }
         )
 
@@ -149,21 +176,47 @@ def web_search(
 
     # 第二遍：require_fresh 时本地过滤旧数据
     stale_dropped = 0
+    undated_kept = 0
+    _MAX_UNDATED = 1  # 无日期结果至多保留 1 条（历史漏洞：无日期=绕过时效）
     if require_fresh:
         kept: list[dict] = []
         for item in candidates:
             year = item.pop("_publish_year", None)
-            # publish_date 缺失或无法解析时保留——避免把没日期的好来源误删
             if year is not None and year < min_year:
                 stale_dropped += 1
                 continue
-            item.pop("_publish_year", None)
+            if year is None:
+                if undated_kept >= _MAX_UNDATED:
+                    stale_dropped += 1
+                    continue
+                undated_kept += 1
             kept.append(item)
         candidates = kept
     else:
         # 清掉临时字段
         for item in candidates:
             item.pop("_publish_year", None)
+
+    # 第三遍：权威感知排序 + 自媒体封顶（始终生效，不依赖 require_fresh）：
+    # trusted > media > blog；返回列表里自媒体（blog）至多 2 条——
+    # 个人号经验帖只能当线索，不能占满证据位（2026-08-22 用户实测反馈）
+    _grade_rank = {"trusted": 0, "media": 1, "blog": 2}
+    candidates.sort(key=lambda c: _grade_rank.get(c.get("source_grade"), 1))
+    blog_kept = 0
+    _MAX_BLOG = 2
+    ranked: list[dict] = []
+    blog_overflow = 0
+    for item in candidates:
+        if item.get("source_grade") == "blog":
+            if blog_kept >= _MAX_BLOG:
+                blog_overflow += 1
+                continue
+            blog_kept += 1
+        ranked.append(item)
+    candidates = ranked
+    if blog_overflow:
+        logger.info("web_search dropped %s blog results (自媒体封顶 %s)",
+                    blog_overflow, _MAX_BLOG)
 
     results = candidates[:max_results]
 
