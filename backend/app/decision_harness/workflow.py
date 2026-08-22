@@ -53,6 +53,9 @@ CHAIR_INSTRUCTIONS = """你是"邪杠会议室"的决策主席（Decision Chair�
 3. delegate_agent / request_research —— 只在计划已给出之后才有意义；
    计划未出时这两个动作会被忽略并收到系统提醒。
 重要：不要跳过 revise_plan 直接委托专家——委托不是计划。
+动作名是封闭集合，只允许：revise_plan / ask_user / delegate_agent /
+request_research。不存在 synthesize、finalize、summarize 等动作——
+综合与最终报告由系统在专家阶段结束后自动执行，你不需要也不能触发。
 
 计划要求（PlanSpec）：objective 具体可验证；expert_tasks 只从八人库选
 （economist/psychologist/historian/mathematician/strategist/legal_scholar/
@@ -225,6 +228,17 @@ def _parse_action_request(final_response: str | None) -> MainAgentActionRequest:
     if start < 0 or end <= start:
         raise ValueError(f"主 Agent 响应不是 JSON: {text[:120]!r}")
     payload = json.loads(text[start : end + 1])
+    # 真跑实测：主席会自造动作词（synthesize 等）。别名统一收口到契约动作。
+    action_alias = {
+        "synthesize": "finalize", "synthesis": "finalize",
+        "synthesize_report": "finalize", "summarize": "finalize",
+        "final_report": "finalize", "plan": "revise_plan",
+        "research": "request_research", "delegate": "delegate_agent",
+    }
+    if isinstance(payload, dict):
+        raw_action = str(payload.get("action") or "").strip().lower()
+        if raw_action in action_alias:
+            payload["action"] = action_alias[raw_action]
     return MainAgentActionRequest.model_validate(payload)
 
 
@@ -468,6 +482,18 @@ class DecisionWorkflow:
                 return
 
             if action == MainAgentAction.DELEGATE_AGENT:
+                # 主席可能用自造的 agents 数组格式（真跑实测）——归一成单条
+                agents_list = request.payload.get("agents")
+                if isinstance(agents_list, list) and agents_list:
+                    first = agents_list[0] if isinstance(agents_list[0], dict) else {}
+                    request = request.model_copy(update={
+                        "payload": {"task_id": first.get("task_id"), "task": first}
+                    })
+                    if len(agents_list) > 1:
+                        yield make_product_event(run_id, "run_log", {
+                            "note": "delegate_agents_array_normalized",
+                            "extra": len(agents_list) - 1,
+                        })
                 if latest_plan is None:
                     # 计划未出：委托无效——提醒主席先出计划（不登记 pending 行）
                     self._pending_observation = (

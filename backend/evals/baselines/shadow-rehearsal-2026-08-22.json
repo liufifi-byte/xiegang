@@ -26,13 +26,13 @@
         "recommendation_strength": "clear",
         "remaining_uncertainties": 0,
         "reversal_conditions": 10,
-        "stance_diversity": 3,
+        "stance_diversity": 2,
         "expert_count": 5,
         "evidence_count": 0
       },
       "both_completed": true,
-      "shadow_run_id": "3ffe1b0b-6d0c-4101-9d28-1562d0ebde96",
-      "shadow_duration_seconds": 658.0
+      "shadow_run_id": "a7d555f4-74c4-4004-a89c-b6c735ea4770",
+      "shadow_duration_seconds": 518.9
     },
     {
       "parliament_id": "e55554c7-7ea9-420d-9529-1015be4372f5",
@@ -49,13 +49,13 @@
         "recommendation_strength": "clear",
         "remaining_uncertainties": 0,
         "reversal_conditions": 10,
-        "stance_diversity": 2,
+        "stance_diversity": 1,
         "expert_count": 5,
         "evidence_count": 0
       },
       "both_completed": true,
-      "shadow_run_id": "10519cd3-86c3-473f-940d-fe63f09220e8",
-      "shadow_duration_seconds": 590.5
+      "shadow_run_id": "9b019db7-7887-44e5-ab77-e0c5034f4c34",
+      "shadow_duration_seconds": 425.8
     }
   ]
 }

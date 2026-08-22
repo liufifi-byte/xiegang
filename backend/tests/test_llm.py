@@ -62,7 +62,7 @@ def test_get_llm_returns_chat_model():
     from app.llm import get_llm
     from app.config import get_settings
     llm = get_llm()
-    assert llm.model_name == "glm-5"
+    assert llm.model_name == get_settings().glm_model  # 模型由 .env 驱动
     assert "bigmodel.cn" in str(llm.openai_api_base)
     # 验证配置可改、且默认值为 90s（之前 45s 不够，已上调）
     assert llm.request_timeout == get_settings().glm_request_timeout_seconds

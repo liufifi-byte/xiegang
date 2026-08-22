@@ -207,6 +207,33 @@ async def test_runtime_crash_isolated_as_failed():
     assert agents and agents[0]["status"] == "failed"
 
 
+def test_lenient_coerce_real_world_shapes():
+    """彩排真实翻车形态：超上限列表 / 非法枚举 / 超长字段 / silent 带观点。"""
+    import json as _json
+    packet = _packet()
+    payload = {
+        "status": "COMPLETED", "relevance": 1.7, "stance": "有点谨慎",
+        "judgment": "判" * 600,
+        "analysis_points": ["a", "b", "c", "d", "e"],
+        "reversal_conditions": ["r1", "r2", "r3", "r4"],
+        "questions_for_user": ["q1", "q2", "q3"],
+        "confidence": -0.5,
+    }
+    result = _parse_sub_agent_result(_json.dumps(payload), packet)
+    assert result is not None
+    assert result.status == "completed"          # 大小写与非法值归一
+    assert result.stance == "neutral"
+    assert len(result.analysis_points) == 3       # 裁剪而非拒收
+    assert len(result.reversal_conditions) == 3
+    assert len(result.questions_for_user) == 2
+    assert len(result.judgment) == 500
+    assert 0.0 <= result.confidence <= 1.0 and result.relevance <= 1.0
+    # silent 夹带观点 → completed（不伪 silent 也不丢内容）
+    silent_rich = _parse_sub_agent_result(_json.dumps({
+        "status": "silent", "judgment": "其实我有看法"}), packet)
+    assert silent_rich.status == "completed"
+
+
 def test_parse_helpers():
     assert _extract_json_object('前言 {"a": 1} 后记') == {"a": 1}
     assert _extract_json_object("```json\n{\"a\": 2}\n```") == {"a": 2}
@@ -218,9 +245,12 @@ def test_parse_helpers():
     )
     assert parsed.task_id == packet.task_id  # 缺省字段由 packet 补齐
     assert parsed.agent_id == "economist"
-    # silent 不得夹带观点（契约层拒绝）
-    assert _parse_sub_agent_result(
+    # silent 夹带观点：不再整体拒收（彩排教训）——内容保留、状态归 completed；
+    # 契约层的"silent 无观点"仍由 schema 保证（真 silent 不受影响）
+    silent_rich = _parse_sub_agent_result(
         json.dumps({"status": "silent", "judgment": "我认为应该跳槽",
                     "analysis_points": ["理由"]}),
         packet,
-    ) is None
+    )
+    assert silent_rich is not None and silent_rich.status == "completed"
+    assert silent_rich.judgment == "我认为应该跳槽"

@@ -228,6 +228,24 @@ async def test_plan_payload_shapes_normalized():
     assert wf.outcome.plan.research_tasks == ["行业薪酬基准"]
     assert any(e["event_type"] == "plan_created" for e in events)
 
+async def test_chair_action_aliases_normalized():
+    """真跑实测：主席自造 synthesize 动作 → 映射为 finalize（登记 deferred 不算 idle）。"""
+    import json as _json
+    sid = "run1:main"
+    fake = FakeAgentRuntime(scripts={sid: [
+        [RuntimeEvent(seq=0, type="turn_final", payload={"final_response":
+            _json.dumps({"action": "synthesize", "payload": {"report": "..."}})})],
+        [_turn_final_event("revise_plan", {"plan": _plan_payload(1)})],
+        [_turn_final_event("ask_user", {"questions": ["q"]})],
+    ]})
+    repo = DecisionRunRepository(force_memory=True)
+    wf = DecisionWorkflow(run_id="run1", decision=DECISION, budget=BUDGET,
+                          runtime=fake, repo=repo)
+    events = await _collect(wf)
+    assert wf.outcome.status == "waiting_user"
+    assert "finalize" in wf.outcome.deferred  # 别名生效且未判 idle
+
+
 async def test_plan_real_shape_from_rollout():
     """真跑 rollout 原始形态：payload.plan 嵌套 + 缺 created_from_state_version
     + 超长 objective + 对象条目 —— 归一化后必须可接受。"""

@@ -27,7 +27,7 @@ from app.decision_harness.event_bridge import (
 )
 from app.decision_harness.repository import DecisionRunRepository
 from app.decision_harness.runtime import AgentRuntime
-from app.decision_harness.schemas import SubAgentResult
+from app.decision_harness.schemas import SubAgentResult, normalize_legacy_stance
 
 EXPERT_BASE_INSTRUCTIONS = """你是"邪杠会议室"的专家成员。你只回答被分配的专业问题，
 不重新定义问题、不给整体生活建议。所有数字与事实必须可追溯；没有依据的表述
@@ -69,6 +69,43 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _coerce_sub_agent_payload(payload: dict, packet: ExpertTaskPacket) -> dict:
+    """真跑实测（彩排）：模型常超列表上限或用非法枚举——按契约裁剪/归一，
+    而不是整份拒收（contrarian 因 4 条 reversal_conditions 全军覆没的教训）。
+    """
+    caps = {
+        "analysis_points": 3, "evidence_refs": 5, "assumptions": 5,
+        "unknowns": 5, "reversal_conditions": 3,
+        "questions_for_other_agents": 3, "questions_for_user": 2,
+    }
+    for field, cap in caps.items():
+        value = payload.get(field)
+        if isinstance(value, list):
+            payload[field] = [str(v)[:2000] for v in value[:cap]]
+        elif value is None:
+            payload[field] = []
+    for field, limit in (("judgment", 500), ("action", 300)):
+        if isinstance(payload.get(field), str):
+            payload[field] = payload[field][:limit]
+    if payload.get("stance") not in ("support", "oppose", "cautious", "neutral"):
+        payload["stance"] = normalize_legacy_stance(str(payload.get("stance") or "neutral"))
+        if payload["stance"] not in ("support", "oppose", "cautious", "neutral"):
+            payload["stance"] = "neutral"
+    if payload.get("status") not in ("completed", "partial", "silent", "failed"):
+        payload["status"] = "completed"
+    # silent 带观点：内容在场则视为 completed（不生成伪观点的反向同样成立）
+    if payload.get("status") == "silent" and (
+        str(payload.get("judgment") or "").strip() or payload.get("analysis_points")
+    ):
+        payload["status"] = "completed"
+    try:
+        payload["relevance"] = max(0.0, min(1.0, float(payload.get("relevance", 0.7))))
+        payload["confidence"] = max(0.0, min(1.0, float(payload.get("confidence", 0.5))))
+    except (TypeError, ValueError):
+        pass
+    return payload
+
+
 def _parse_sub_agent_result(
     final_response: str | None, packet: ExpertTaskPacket
 ) -> SubAgentResult | None:
@@ -78,6 +115,7 @@ def _parse_sub_agent_result(
     payload.setdefault("task_id", packet.task_id)
     payload.setdefault("agent_id", packet.expert_id)
     payload.setdefault("status", "completed")
+    payload = _coerce_sub_agent_payload(payload, packet)
     try:
         return SubAgentResult.model_validate(payload)
     except Exception:
