@@ -509,7 +509,11 @@ class DecisionWorkflow:
             )
             jobs.append(ExpertJob(
                 packet=packet,
-                context=compile_child_context(packet, decision=self.decision, plan=plan),
+                context=compile_child_context(
+                    packet, decision=self.decision, plan=plan,
+                    evidence=(self.evidence_kernel.usable_summary()
+                              if getattr(self, "evidence_kernel", None) else None),
+                ),
             ))
             yield make_product_event(
                 run_id, "agent_task_created",
@@ -563,3 +567,53 @@ class DecisionWorkflow:
             run_id, "run_log",
             {"note": "experts_complete", **observation["summary"]},
         )
+
+    # ============================================================
+    # Phase 4：Research Lead（claim 驱动研究 → Evidence Kernel）
+    # ============================================================
+
+    async def run_research(
+        self,
+        *,
+        provider: Any | None = None,
+        claims: list[Any] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """对计划的 blocking_unknowns/research_tasks 跑 claim 驱动研究。
+
+        provider 缺省 NoopSearchProvider（触发降级路径：claims 保持
+        unverified，Run 不受影响）。证据写 Evidence Kernel + evidence_records，
+        随后 run_experts 编译上下文时自动携带可用证据摘要。
+        """
+        from app.decision_harness.evidence_kernel import Claim, EvidenceKernel
+        from app.decision_harness.research_lead import (
+            NoopSearchProvider,
+            ResearchLead,
+        )
+
+        run_id = self.run_id
+        plan = self.outcome.plan if (self.outcome and self.outcome.plan) else None
+        if plan is None:
+            row = await self.repo.get_run(run_id)
+            if row and row.get("active_plan"):
+                plan = PlanSpec.model_validate(row["active_plan"])
+        if plan is None:
+            raise ValueError("run_research 需要先完成计划（先跑 run_to_plan）")
+
+        if claims is None:
+            claims = [
+                Claim(claim_id=f"claim-{i}", text=text, domain="general")
+                for i, text in enumerate(
+                    list(plan.blocking_unknowns) + list(plan.research_tasks), start=1
+                )
+                if text and len(text) >= 6
+            ]
+        kernel = getattr(self, "evidence_kernel", None) or EvidenceKernel(run_id=run_id)
+        self.evidence_kernel = kernel
+
+        lead = ResearchLead(
+            run_id=run_id, kernel=kernel, repo=self.repo,
+            provider=provider or NoopSearchProvider(),
+            max_rounds=self.budget.max_search_rounds_per_gap,
+        )
+        async for event in lead.research_claims(claims):
+            yield event

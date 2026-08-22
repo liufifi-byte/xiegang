@@ -50,10 +50,11 @@ def _uuid() -> str:
 
 # ============ 模块级内存存储（测试 / SKIP_DB 模式）============
 
-_MEMORY: dict[str, dict[str, Any]] = {
+_MEMORY: dict[str, dict[Any, Any]] = {
     "runs": {},  # run_id -> row dict
     "agent_runs": {},  # agent_run_id -> row dict
     "plan_versions": {},  # (run_id, version) -> row dict
+    "evidence": {},  # (run_id, evidence_id) -> row dict
 }
 
 
@@ -307,6 +308,77 @@ class DecisionRunRepository:
                 if v["decision_run_id"] == run_id
             ]
         sql = "SELECT * FROM agent_runs WHERE decision_run_id = %s ORDER BY created_at"
+        return await asyncio.to_thread(self._fetch_all, sql, [run_id])
+
+    # ============ evidence_records（Phase 4）============
+
+    async def upsert_evidence(
+        self,
+        run_id: str,
+        evidence_id: str,
+        *,
+        claim_id: str,
+        kind: str,
+        status: str,
+        source_title: str = "",
+        source_url: str | None = None,
+        source_domain: str = "",
+        excerpt: str = "",
+        relevance: float = 0.5,
+        reliability: float = 0.5,
+        authority_level: str = "unknown",
+        raw: dict[str, Any] | None = None,
+    ) -> None:
+        """幂等写入证据行（UNIQUE(decision_run_id, evidence_id)）。"""
+        if self._memory:
+            key = (run_id, evidence_id)
+            section = _MEMORY.setdefault("evidence", {})
+            section[key] = {
+                "id": evidence_id,
+                "decision_run_id": run_id,
+                "claim_id": claim_id,
+                "kind": kind,
+                "status": status,
+                "source_title": source_title,
+                "source_url": source_url,
+                "source_domain": source_domain,
+                "excerpt": excerpt,
+                "relevance": relevance,
+                "reliability": reliability,
+                "authority_level": authority_level,
+                "raw": dict(raw or {}),
+            }
+            return
+        sql = """
+            INSERT INTO evidence_records
+              (id, decision_run_id, claim_id, kind, status, source_title,
+               source_url, source_domain, excerpt, relevance, reliability,
+               authority_level, metadata, retrieved_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, now())
+            ON CONFLICT (decision_run_id, id) DO UPDATE SET
+              status = EXCLUDED.status,
+              reliability = EXCLUDED.reliability,
+              authority_level = EXCLUDED.authority_level,
+              metadata = EXCLUDED.metadata
+        """
+        await asyncio.to_thread(
+            self._exec,
+            sql,
+            [evidence_id, run_id, claim_id, kind, status, source_title,
+             source_url, source_domain, excerpt, relevance, reliability,
+             authority_level, json.dumps(raw or {})],
+        )
+
+    async def list_evidence(self, run_id: str) -> list[dict[str, Any]]:
+        if self._memory:
+            section = _MEMORY.get("evidence", {})
+            return [dict(v) for (rid, _), v in section.items() if rid == run_id]
+        sql = """
+            SELECT id, decision_run_id, claim_id, kind, status, source_title,
+                   source_url, source_domain, excerpt, relevance, reliability,
+                   authority_level
+            FROM evidence_records WHERE decision_run_id = %s
+        """
         return await asyncio.to_thread(self._fetch_all, sql, [run_id])
 
     # ============ 底层执行（仅 DB 模式）============

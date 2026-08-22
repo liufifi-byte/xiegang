@@ -100,11 +100,13 @@ def compile_child_context(
     *,
     decision: DecisionModel,
     plan: PlanSpec,
+    evidence: list[dict[str, Any]] | None = None,
 ) -> ContextPacket:
     """编译子 Agent 上下文包（spec §11.2：带版本与内容哈希）。
 
-    sections 固定六节：decision / task / user_facts / unknowns /
-    role_contract / budget。注意：这里没有任何其他专家的输出——
+    sections 固定七节：decision / task / user_facts / evidence / unknowns /
+    role_contract / budget。evidence 只放可用证据（verified/corroborated）
+    的摘要白名单（无 excerpt，§15.2）。这里没有任何其他专家的输出——
     那是 Root 在辩论阶段（Phase 5）的显式决策，不在编译层隐式注入。
     """
     sections: dict[str, Any] = {
@@ -129,6 +131,7 @@ def compile_child_context(
             "verified": packet.relevant_user_facts,
             "preferences": decision.preferences[:12],
         },
+        "evidence": evidence or [],
         "unknowns": packet.known_unknowns,
         "role_contract": packet.role_contract,
         "budget": {
