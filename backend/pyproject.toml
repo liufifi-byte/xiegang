@@ -20,6 +20,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Decision Agent Runtime V4（Phase 1）：Codex App Server Python SDK，
+# 含钉死版本的本地 runtime 二进制。生产镜像暂不安装（Phase 8 再评估），
+# 缺失时 CodexAgentRuntime 构造抛 codex_sdk_unavailable，legacy 流程不受影响。
+codex = [
+    "openai-codex==0.147.0",
+]
 dev = [
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",

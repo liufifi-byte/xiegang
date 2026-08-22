@@ -57,7 +57,9 @@ class AgentRuntime(Protocol):
 
     async def start_session(self, session_id: str, *, instructions: str) -> None: ...
 
-    async def resume_session(self, session_id: str) -> None: ...
+    async def resume_session(
+        self, session_id: str, *, runtime_thread_id: str | None = None
+    ) -> None: ...
 
     async def start_turn(
         self, session_id: str, prompt: str, *, tools: list[str] | None = None
@@ -105,7 +107,9 @@ class FakeAgentRuntime:
         }
         self._turn_index[session_id] = 0
 
-    async def resume_session(self, session_id: str) -> None:
+    async def resume_session(
+        self, session_id: str, *, runtime_thread_id: str | None = None
+    ) -> None:
         self.calls.append(("resume_session", session_id))
         if session_id not in self._sessions:
             raise AgentRuntimeError(
@@ -114,6 +118,7 @@ class FakeAgentRuntime:
                 retryable=False,
             )
         self._sessions[session_id]["resumed"] = True
+        self._sessions[session_id]["resumed_thread_id"] = runtime_thread_id
 
     async def interrupt_turn(self, session_id: str) -> None:
         self.calls.append(("interrupt_turn", session_id))

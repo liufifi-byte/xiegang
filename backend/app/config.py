@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -110,6 +111,14 @@ class Settings(BaseSettings):
     # 切换不得改变创建会议 API；非法值在 get_runtime_mode() 校验时报领域错误。
     # ============================================================
     decision_runtime_mode: str = "legacy"
+
+    # Codex Runtime Adapter（Phase 1）。SDK 是可选依赖：
+    # pip install -e ".[codex]"（openai-codex 含钉死版本的本地 runtime 二进制）。
+    # codex_model 为空串 = 使用 Codex runtime 默认模型。
+    codex_model: str = ""
+    codex_api_key: str | None = None
+    # Phase 1 主 Agent 只读状态：read_only（spec §7 只允许读工具）。
+    codex_sandbox: Literal["read_only", "workspace_write", "full_access"] = "read_only"
 
 
 @lru_cache
