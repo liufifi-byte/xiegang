@@ -102,6 +102,15 @@ class Settings(BaseSettings):
     # 例：全局 5 + 每议会 2 → 两议会各占 2 槽，剩 1 槽给 summary/election 等单点调用。
     per_parliament_llm_concurrency: int = 2
 
+    # ============================================================
+    # Decision Agent Runtime V4（spec 2026-08-22 §19.4）
+    # legacy     —— 现有 LangGraph（默认，生产行为不变）
+    # shadow     —— 用户看旧结果，新 Runtime 后台跑并记录对比
+    # codex_harness —— 新 Runtime 正式输出
+    # 切换不得改变创建会议 API；非法值在 get_runtime_mode() 校验时报领域错误。
+    # ============================================================
+    decision_runtime_mode: str = "legacy"
+
 
 @lru_cache
 def get_settings() -> Settings:

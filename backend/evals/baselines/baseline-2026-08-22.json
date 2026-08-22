@@ -1,0 +1,45 @@
+{
+  "generated_at": "2026-08-22T06:30:58.788352+00:00",
+  "snapshot_upper_bound": "2026-08-21T05:42:26.671331+00:00",
+  "limit": 25,
+  "runtime_mode": "legacy",
+  "metrics": {
+    "total_cases": 25,
+    "by_status": {
+      "done": 14,
+      "cancelled": 5,
+      "failed": 6
+    },
+    "completion_rate": 0.56,
+    "cancel_rate": 0.2,
+    "failure_rate": 0.24,
+    "duration_seconds": {
+      "p50": 329.0,
+      "p95": 1143.0,
+      "max": 1215.0,
+      "mean": 540.2857142857143
+    },
+    "experts_per_council": {
+      "mean": 5,
+      "min": 5,
+      "max": 5
+    },
+    "research_publish_rate": {
+      "mean": 0.74
+    },
+    "debate_degradation_rate": {
+      "mean": 0.22527472527472528,
+      "councils_with_degradation": 6
+    },
+    "stance_diversity_per_council": {
+      "mean": 1.6666666666666667
+    },
+    "repetition_rate": {
+      "mean": 0.037060151838402736
+    },
+    "citation": {
+      "evidence_items": 176,
+      "url_coverage": 0.0
+    }
+  }
+}
