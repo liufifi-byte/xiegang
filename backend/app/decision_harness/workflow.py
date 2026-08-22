@@ -617,3 +617,93 @@ class DecisionWorkflow:
         )
         async for event in lead.research_claims(claims):
             yield event
+
+    # ============================================================
+    # Phase 5：Debate Loop（争议提取 → 定向辩论）
+    # ============================================================
+
+    async def run_debate(
+        self,
+        *,
+        results: list[SubAgentResult] | None = None,
+        max_rounds: int | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """从专家结果提取实质分歧并跑定向辩论（spec §9）。
+
+        只围绕立场对立（support vs oppose）的实质分歧开辩论；
+        每争议最多 max_debate_rounds_per_dispute 轮（默认 2）；
+        允许保留分歧。终态 status="debated"（审计/终局属 Phase 6）。
+        """
+        from app.decision_harness.debate_loop import (
+            DebateRunner,
+            structural_disputes,
+        )
+
+        run_id = self.run_id
+        if results is None:
+            results = getattr(self, "expert_results", None) or []
+        if not results:
+            rows = await self.repo.list_agent_runs(run_id)
+            results = [
+                SubAgentResult.model_validate(r["result"])
+                for r in rows
+                if r.get("agent_type") == "expert" and r.get("result")
+            ]
+        if not results:
+            raise ValueError("run_debate 需要专家结果（先跑 run_experts）")
+
+        await self.repo.update_run(run_id, workflow_phase=WorkflowPhase.DISPUTE_EXTRACTION.value)
+        yield make_product_event(run_id, "run_log", {"phase": WorkflowPhase.DISPUTE_EXTRACTION.value})
+
+        disputes = structural_disputes(results)
+        if not disputes:
+            await self.repo.update_run(run_id, workflow_phase=WorkflowPhase.DEBATE_LOOP.value)
+            yield make_product_event(run_id, "run_log", {"note": "no_material_disputes"})
+            await self.repo.update_run(run_id, status="debated")
+            self.disputes = []
+            return
+
+        # expert_id → agent_runs 行（拿 runtime_thread_id 恢复线程）
+        agent_rows = {
+            r["expert_id"]: r
+            for r in await self.repo.list_agent_runs(run_id)
+            if r.get("agent_type") == "expert" and r.get("expert_id")
+        }
+
+        await self.repo.update_run(run_id, workflow_phase=WorkflowPhase.DEBATE_LOOP.value)
+        yield make_product_event(run_id, "run_log", {"phase": WorkflowPhase.DEBATE_LOOP.value})
+
+        budget_rounds = max_rounds or self.budget.max_debate_rounds_per_dispute
+        outcomes = []
+        for dispute in disputes:
+            runner = DebateRunner(
+                run_id=run_id, dispute=dispute, agent_rows=agent_rows,
+                runtime=self.runtime, repo=self.repo, max_rounds=budget_rounds,
+            )
+            async for event in runner.run():
+                yield event
+            if runner.outcome is not None:
+                outcomes.append(runner.outcome)
+
+        row = await self.repo.get_run(run_id)
+        state = dict(row.get("decision_state") or {}) if row else {}
+        state["disputes"] = [
+            {
+                "dispute_id": o.dispute.dispute_id,
+                "question": o.dispute.question[:200],
+                "status": o.dispute.status,
+                "rounds": o.dispute.round,
+                "participants": o.dispute.participants,
+                "stop_reason": o.stop_reason,
+            }
+            for o in outcomes
+        ]
+        await self.repo.update_run(run_id, decision_state=state, status="debated")
+        self.disputes = outcomes
+        yield make_product_event(run_id, "run_log", {
+            "note": "debate_complete",
+            "disputes": len(outcomes),
+            "resolved": sum(1 for o in outcomes if o.dispute.status == "resolved"),
+            "narrowed": sum(1 for o in outcomes if o.dispute.status == "narrowed"),
+            "retained": sum(1 for o in outcomes if o.dispute.status == "retained"),
+        })

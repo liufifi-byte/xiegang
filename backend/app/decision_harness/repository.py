@@ -55,6 +55,7 @@ _MEMORY: dict[str, dict[Any, Any]] = {
     "agent_runs": {},  # agent_run_id -> row dict
     "plan_versions": {},  # (run_id, version) -> row dict
     "evidence": {},  # (run_id, evidence_id) -> row dict
+    "disputes": {},  # (run_id, dispute_key) -> row dict
 }
 
 
@@ -378,6 +379,71 @@ class DecisionRunRepository:
                    source_url, source_domain, excerpt, relevance, reliability,
                    authority_level
             FROM evidence_records WHERE decision_run_id = %s
+        """
+        return await asyncio.to_thread(self._fetch_all, sql, [run_id])
+
+    # ============ debate_issues（Phase 5）============
+
+    async def upsert_dispute(
+        self,
+        run_id: str,
+        *,
+        dispute_key: str,
+        question: str,
+        importance: float,
+        conflict_type: str,
+        participants: list[str],
+        claims: list[dict[str, Any]] | None = None,
+        status: str = "open",
+        round_count: int = 0,
+        resolution: dict[str, Any] | None = None,
+    ) -> None:
+        if self._memory:
+            section = _MEMORY.setdefault("disputes", {})
+            section[(run_id, dispute_key)] = {
+                "dispute_key": dispute_key,
+                "decision_run_id": run_id,
+                "question": question,
+                "importance": importance,
+                "conflict_type": conflict_type,
+                "participants": list(participants),
+                "claims": claims or [],
+                "status": status,
+                "round_count": round_count,
+                "resolution": resolution,
+            }
+            return
+        sql = """
+            INSERT INTO debate_issues
+              (id, decision_run_id, dispute_key, question, importance,
+               conflict_type, participants, claims, status, round_count,
+               resolution, updated_at)
+            VALUES (gen_random_uuid(), %s, %s, %s, %s, %s, %s::jsonb,
+                    %s::jsonb, %s, %s, %s::jsonb, now())
+            ON CONFLICT (decision_run_id, dispute_key) DO UPDATE SET
+              status = EXCLUDED.status,
+              round_count = EXCLUDED.round_count,
+              resolution = EXCLUDED.resolution,
+              claims = EXCLUDED.claims,
+              participants = EXCLUDED.participants,
+              updated_at = now()
+        """
+        await asyncio.to_thread(
+            self._exec,
+            sql,
+            [run_id, dispute_key, question, importance, conflict_type,
+             json.dumps(participants), json.dumps(claims or []),
+             status, round_count, json.dumps(resolution or {})],
+        )
+
+    async def list_disputes(self, run_id: str) -> list[dict[str, Any]]:
+        if self._memory:
+            section = _MEMORY.get("disputes", {})
+            return [dict(v) for (rid, _), v in section.items() if rid == run_id]
+        sql = """
+            SELECT dispute_key, question, importance, conflict_type,
+                   participants, claims, status, round_count, resolution
+            FROM debate_issues WHERE decision_run_id = %s
         """
         return await asyncio.to_thread(self._fetch_all, sql, [run_id])
 
