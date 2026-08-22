@@ -72,7 +72,7 @@ class FakeThread:
         self.turns: list[FakeHandle] = []
         self.compacted = 0
 
-    def turn(self, input, **kwargs):
+    async def turn(self, input, **kwargs):  # 与 AsyncThread.turn 对齐（async）
         handle = FakeHandle(self._next_notifications.pop(0))
         self.turns.append(handle)
         return handle

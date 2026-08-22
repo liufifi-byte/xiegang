@@ -132,10 +132,15 @@ class CodexAgentRuntime:
                 # 而非带 app-server 子命令的 codex CLI——SDK 默认 argv 会拼上
                 # "app-server" 子命令导致启动失败，必须用 launch_args_override
                 # 整替 argv（SDK client.start()：override 非空则完全替换）。
-                config = CodexConfig(
-                    launch_args_override=(self._codex_bin, "--listen", "stdio://")
-                )
-                client = AsyncCodex(config)
+                kwargs: dict[str, Any] = {
+                    "launch_args_override": (self._codex_bin, "--listen", "stdio://"),
+                }
+                if get_settings().codex_use_glm_gateway:
+                    # 模型走智谱：CODEX_HOME 写 config.toml 指向 GLM 网关
+                    from app.glm_gateway.provider import build_glm_codex_env
+
+                    kwargs = build_glm_codex_env(codex_bin=self._codex_bin)
+                client = AsyncCodex(CodexConfig(**kwargs))
             else:
                 client = AsyncCodex()
             api_key = get_settings().codex_api_key
@@ -204,7 +209,7 @@ class CodexAgentRuntime:
         self, session_id: str, prompt: str, *, tools: list[str] | None = None
     ) -> AsyncIterator[RuntimeEvent]:
         session = self._session(session_id)
-        handle = session.thread.turn(TextInput(text=prompt))
+        handle = await session.thread.turn(TextInput(text=prompt))
         self._live_handles[session_id] = handle
         items: list[Any] = []
         try:

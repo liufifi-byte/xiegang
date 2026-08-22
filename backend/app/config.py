@@ -127,6 +127,12 @@ class Settings(BaseSettings):
     # 空 = 使用 SDK 自带的 pinned runtime。见 CODEX_FORK_PIN。
     codex_bin: str | None = None
 
+    # GLM→Responses 网关（python -m app.glm_gateway）：
+    # 开启后 CodexAgentRuntime 用自建二进制 + CODEX_HOME 指向网关，
+    # 模型走智谱（spec §13.6 模型策略的落地路径）。
+    codex_use_glm_gateway: bool = False
+    glm_gateway_url: str = "http://127.0.0.1:8098"
+
 
 @lru_cache
 def get_settings() -> Settings:

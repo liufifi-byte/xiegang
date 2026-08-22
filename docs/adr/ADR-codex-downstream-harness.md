@@ -71,7 +71,7 @@ Agent Runtime 内核；领域能力优先通过扩展点实现；必要的 Core 
 
 ```text
 upstream  https://github.com/openai/codex          （只读）
-fork      git@…（深墨 Fork，待创建；本地 /Users/xinyiliu/Desktop/codex-fork 已就绪）
+fork      https://github.com/liufifi-byte/xiegang-codex（shenmo/main + shenmo-pin-* 标签）
 product   xiegang 主仓库                            （不变）
 ```
 
@@ -132,6 +132,11 @@ product   xiegang 主仓库                            （不变）
   并发出 `configWarning` 通知（未信任项目目录的正常提醒）；
 - Python SDK（openai-codex 0.147.0）与 343074d420 的协议面核对：核心方法/通知
   一致（SDK 落后主线约 3 个 minor，正式落地时二选一：升级 SDK 或锚 0.147.x tag）。
+- **智谱 GLM 全链验证（2026-08-22，决策 2 落地）**：GLM→Responses 网关
+  （`backend/app/glm_gateway/`，`python -m app.glm_gateway`）+ CODEX_HOME
+  provider 配置；真实 glm-5.2 → 网关 → 自建二进制 → CodexAgentRuntime
+  完整 turn 冒烟通过。Codex 模型侧从此走智谱，不依赖 OpenAI 凭据；
+  非 OpenAI provider 自动使用本地压缩（§12 风险 2 的现实代价已接受）。
 
 ## 12. 风险与开放问题
 
