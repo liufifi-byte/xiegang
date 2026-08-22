@@ -34,6 +34,9 @@ EXPERT_BASE_INSTRUCTIONS = """你是"邪杠会议室"的专家成员。你只回
 放进 unknowns，不要编造。输出遵守任务包的输出契约（只输出 SubAgentResult JSON）。
 """
 
+# spec §4.4：相关性低于阈值的专家不发言（转 silent，不生成伪观点）
+SILENCE_RELEVANCE_THRESHOLD = 0.3
+
 _JUDGMENT_MAX_CHARS = 500
 
 
@@ -81,6 +84,41 @@ def _parse_sub_agent_result(
         return None
 
 
+def enforce_relevance_gate(result: SubAgentResult) -> SubAgentResult:
+    """spec §4.4：低相关专家不发言——completed 且 relevance 低于阈值 → silent。
+
+    silent 契约：不带观点（judgment 清空、analysis_points 清空），
+    至多保留 1 个用户问题。自报 silent/failed/partial 的结果不动。
+    """
+    if result.status != "completed":
+        return result
+    if result.relevance >= SILENCE_RELEVANCE_THRESHOLD:
+        return result
+    return result.model_copy(update={
+        "status": "silent",
+        "judgment": "",
+        "analysis_points": [],
+        "questions_for_user": result.questions_for_user[:1],
+        "confidence": min(result.confidence, 0.3),
+        "relevance": result.relevance,  # 保留原始相关度供审计
+    })
+
+
+def check_role_boundary(result: SubAgentResult) -> str | None:
+    """结构性角色越界检查（语义级检查属 Phase 4 Evidence Kernel）。
+
+    返回越界说明；None = 通过。通过时置 completion.boundary_checked。
+    """
+    if "http" in (result.judgment or "") and not result.evidence_refs:
+        return "judgment_cites_url_without_evidence_refs"
+    return None
+
+
+def _with_boundary_checked(result: SubAgentResult) -> SubAgentResult:
+    completion = result.completion.model_copy(update={"boundary_checked": True})
+    return result.model_copy(update={"completion": completion})
+
+
 class ExpertAgentRunner:
     """跑一个专家任务。用法与 DecisionWorkflow 一致：
 
@@ -111,6 +149,11 @@ class ExpertAgentRunner:
         self.outcome: ExpertRunOutcome | None = None
         self.agent_run_id = f"{run_id}:agent:{packet.task_id}"
         self.session_id = f"{run_id}:expert:{packet.task_id}"
+        self._cancel_requested = False
+
+    def request_cancel(self) -> None:
+        """调度器/用户取消：当前轮可被 interrupt 打断，后续轮不再开始。"""
+        self._cancel_requested = True
 
     def _event(self, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         return make_product_event(self.run_id, event_type, payload)
@@ -159,7 +202,8 @@ class ExpertAgentRunner:
             )
             if thread_id:
                 await repo.upsert_agent_run(
-                    self.agent_run_id, runtime_thread_id=thread_id
+                    self.agent_run_id, decision_run_id=run_id,
+                    agent_type="expert", runtime_thread_id=thread_id,
                 )
             yield self._event(
                 "agent_started",
@@ -169,6 +213,8 @@ class ExpertAgentRunner:
 
             async with asyncio.timeout(self.timeout_seconds):
                 for turn in range(self.child_turn_limit):
+                    if self._cancel_requested:
+                        break  # 取消后不再开新轮（spec §8.4 任务取消）
                     prompt = (
                         render_child_prompt(packet, self.context)
                         if turn == 0
@@ -196,12 +242,14 @@ class ExpertAgentRunner:
                                 last_agent_text = item["text"]
                     turns_used = turn + 1
                     if interrupted:
+                        if self._cancel_requested:
+                            break
                         continue  # Turn timeout→中断→缩小重试（spec §16.3）
                     result = _parse_sub_agent_result(final_response, packet)
                     if result is not None:
                         break
 
-                if result is None:
+                if result is None and not self._cancel_requested:
                     # 预算将尽：强制收敛一轮（partial 退出路径）
                     final_response = None
                     async for event in runtime.start_turn(
@@ -233,7 +281,22 @@ class ExpertAgentRunner:
             result = self._failed_result(f"expert_error:{type(exc).__name__}")
 
         if result is None:
-            result = self._failed_result("no_valid_sub_agent_result")
+            if self._cancel_requested:
+                result = self._failed_result("expert_cancelled")
+            else:
+                result = self._failed_result("no_valid_sub_agent_result")
+
+        # 角色越界检查在相关度门之前：检查的是子 Agent 的原始输出
+        boundary_note = check_role_boundary(result)
+        # 相关性门（spec §4.4 低相关不发言）
+        result = enforce_relevance_gate(result)
+        result = _with_boundary_checked(result)
+        if boundary_note:
+            yield self._event(
+                "run_log",
+                {"note": "role_boundary", "task_id": packet.task_id,
+                 "detail": boundary_note},
+            )
 
         # 结构化 Write-back（spec §11.3：子 Agent 只写回 Delta，不改 Canonical State）
         await repo.upsert_agent_run(
@@ -277,3 +340,76 @@ def get_expert_profile(expert_id: str):
     if profile is None:
         raise KeyError(f"未知专家 ID: {expert_id!r}")
     return profile
+
+
+async def send_followup(
+    *,
+    run_id: str,
+    agent_run_row: dict[str, Any],
+    questions: list[str],
+    runtime: AgentRuntime,
+    repo: DecisionRunRepository,
+    timeout_seconds: float = 120.0,
+) -> tuple[SubAgentResult, bool, list[dict[str, Any]]]:
+    """对已完成的子 Agent 追问（spec §10.2 follow-up）。
+
+    恢复该专家的 Runtime 线程（agent_runs.runtime_thread_id），发一轮
+    follow-up，返回 (新结果, 是否成功, 产品事件列表)。失败时返回旧结果，
+    不抛异常（与 ExpertAgentRunner 相同的隔离铁律）。
+    """
+    events: list[dict[str, Any]] = []
+    task_id = agent_run_row.get("task_id") or ""
+    expert_id = agent_run_row.get("expert_id") or ""
+    old_result = SubAgentResult.model_validate(agent_run_row["result"])
+    thread_id = agent_run_row.get("runtime_thread_id")
+    if not thread_id:
+        events.append(make_product_event(run_id, "run_log", {
+            "note": "followup_no_thread", "task_id": task_id}))
+        return old_result, False, events
+
+    session_id = f"{run_id}:expert:{task_id}"
+    try:
+        await runtime.resume_session(session_id, runtime_thread_id=thread_id)
+        prompt = (
+            "主 Agent 对你的结论有追问，请只针对问题回答，输出更新后的完整 "
+            "SubAgentResult JSON：\n"
+            + "\n".join(f"- {q}" for q in questions)
+        )
+        final_response: str | None = None
+        async with asyncio.timeout(timeout_seconds):
+            async for event in runtime.start_turn(session_id, prompt):
+                translated = translate_runtime_event(run_id, event)
+                if translated is not None:
+                    translated["payload"]["agent"] = expert_id
+                    translated["payload"]["task_id"] = task_id
+                    events.append(translated)
+                if event.type == "turn_final":
+                    final_response = event.payload.get("final_response")
+        packet = ExpertTaskPacket.model_validate(agent_run_row["task_packet"])
+        new_result = _parse_sub_agent_result(final_response, packet)
+        if new_result is None:
+            events.append(make_product_event(run_id, "run_log", {
+                "note": "followup_invalid_response", "task_id": task_id}))
+            return old_result, False, events
+        new_result = enforce_relevance_gate(new_result)
+        new_result = _with_boundary_checked(new_result)
+        await repo.upsert_agent_run(
+            agent_run_row["id"],
+            decision_run_id=run_id,
+            agent_type="expert",
+            expert_id=expert_id,
+            status=new_result.status,
+            result=new_result.model_dump(mode="json"),
+            finished=True,
+        )
+        events.append(make_product_event(run_id, "agent_completed", {
+            "agent_id": expert_id, "task_id": task_id,
+            "status": new_result.status, "followup": True,
+        }))
+        await runtime.close_session(session_id)
+        return new_result, True, events
+    except Exception as exc:
+        events.append(make_product_event(run_id, "run_log", {
+            "note": "followup_error", "task_id": task_id,
+            "detail": f"{type(exc).__name__}"[:120]}))
+        return old_result, False, events

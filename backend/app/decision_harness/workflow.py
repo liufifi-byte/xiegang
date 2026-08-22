@@ -25,12 +25,15 @@ from app.decision_harness.event_bridge import make_product_event, translate_runt
 from app.decision_harness.expert_loop import ExpertAgentRunner
 from app.decision_harness.repository import DecisionRunRepository
 from app.decision_harness.runtime import AgentRuntime, AgentRuntimeError
+from app.decision_harness.scheduler import ExpertJob, ExpertScheduler
 from app.decision_harness.schemas import (
     BudgetPolicy,
     DecisionModel,
     EXPERT_IDS,
     MainAgentAction,
     MainAgentActionRequest,
+    MAX_EXPERTS,
+    MIN_EXPERTS,
     PlanSpec,
     SubAgentResult,
     WorkflowPhase,
@@ -84,25 +87,68 @@ class WorkflowOutcome:
     deferred: list[str] = field(default_factory=list)
 
 
-# Phase 2 垂直切片：只放经济学家（spec §20 Phase 2；扩展到八人是 Phase 3）
+# Phase 3：八人库全员接入（spec §5.3）；默认任务只作计划缺项时的补位
 DEFAULT_EXPERT_TASKS = {
     "economist": "评估各选项在未来 12 个月的现金流压力、隐性成本与机会成本",
+    "psychologist": "评估该决策背后的动机、逃避模式与执行阶段的心理风险",
+    "historian": "寻找同类决策的历史先例，归纳其长期结局的规律与教训",
+    "mathematician": "建立量化比较框架，识别决定性变量与各选项的盈亏阈值",
+    "strategist": "分析各方博弈格局、谈判筹码与行动的时机窗口",
+    "legal_scholar": "识别该决策涉及的法律义务、合同约束与合规风险",
+    "sociologist": "评估该决策对家庭角色、社会关系与身份认同的影响",
+    "contrarian": "构造当前倾向的最强反方论证，检验其脆弱点与适用边界",
 }
 
+# 补位顺序（计划专家不足 3 位时，按此顺序补到 MIN_EXPERTS）
+_PAD_ORDER = ("economist", "psychologist", "contrarian", "strategist",
+              "mathematician", "historian", "legal_scholar", "sociologist")
 
-def _parse_expert_tasks(plan: PlanSpec) -> list[tuple[str, str]]:
-    """plan.expert_tasks 形如 "economist: 现金流压力测试" → [(expert_id, objective)]。"""
-    tasks: list[tuple[str, str]] = []
+
+def select_expert_tasks(
+    plan: PlanSpec,
+    *,
+    allowed_experts: tuple[str, ...],
+    user_experts: tuple[str, ...] | None = None,
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """计划任务 → 最终调度清单（spec §5.3：3-5 位、每专家一任务）。
+
+    规则：解析 "expert_id: objective" → 过滤白名单与用户选择 →
+    按专家去重（重复任务不产生重复发言）→ 超过 5 位截断、不足 3 位
+    按 _PAD_ORDER 补位。返回 (清单, 调整说明)。
+    """
+    notes: list[str] = []
+    pool = dict(DEFAULT_EXPERT_TASKS)
+    if user_experts is not None:
+        allowed_experts = tuple(e for e in allowed_experts if e in user_experts)
+
+    picked: dict[str, str] = {}
     for entry in plan.expert_tasks:
         expert_id, _, objective = entry.partition(":")
         expert_id = expert_id.strip()
         objective = objective.strip()
-        if expert_id not in EXPERT_IDS:
+        if expert_id not in allowed_experts:
+            continue
+        if expert_id in picked:
+            notes.append(f"duplicate_task_dropped:{expert_id}")
             continue
         if len(objective) < 10:
-            objective = DEFAULT_EXPERT_TASKS.get(expert_id, objective) or objective
-        tasks.append((expert_id, objective))
-    return tasks
+            objective = pool.get(expert_id, objective) or objective
+        picked[expert_id] = objective
+
+    if len(picked) > MAX_EXPERTS:
+        dropped = list(picked.keys())[MAX_EXPERTS:]
+        notes.append("trimmed:" + ",".join(dropped))
+        picked = dict(list(picked.items())[:MAX_EXPERTS])
+    if len(picked) < MIN_EXPERTS:
+        for expert_id in _PAD_ORDER:
+            if len(picked) >= MIN_EXPERTS:
+                break
+            if expert_id in picked or expert_id not in allowed_experts:
+                continue
+            picked[expert_id] = pool[expert_id]
+            notes.append(f"padded:{expert_id}")
+
+    return list(picked.items()), notes
 
 
 def _chair_prompt(
@@ -411,17 +457,22 @@ class DecisionWorkflow:
     async def run_experts(
         self,
         *,
-        allowed_experts: tuple[str, ...] = ("economist",),
+        allowed_experts: tuple[str, ...] | None = None,
+        user_experts: tuple[str, ...] | None = None,
+        max_concurrency: int = 3,
     ) -> AsyncIterator[dict[str, Any]]:
-        """按计划跑专家子 Agent（Phase 2 只放经济学家）。
+        """按计划跑专家子 Agent（Phase 3：八人库 + 并发调度）。
 
         前置：run_to_plan 已产出计划（本实例 outcome 或 DB active_plan）。
-        失败隔离：单个子 Agent 失败/超时只产生 failed 结果行，不影响
-        其他任务与 Root Run（ExpertAgentRunner 保证不抛异常）。
+        选择：select_expert_tasks 过滤白名单/用户选择，去重，收敛到 3-5 位。
+        并发：ExpertScheduler（默认同会议最多 3 个活跃 Child，spec §16.2）。
+        失败隔离：单个子 Agent 失败/超时只产生 failed 结果行，不影响其他。
         终态：run status="experts_done"（辩论/审计/终局属 Phase 5/6）。
         """
         run_id = self.run_id
         repo, runtime = self.repo, self.runtime
+        if allowed_experts is None:
+            allowed_experts = tuple(sorted(EXPERT_IDS))
 
         plan = self.outcome.plan if (self.outcome and self.outcome.plan) else None
         if plan is None:
@@ -434,17 +485,19 @@ class DecisionWorkflow:
         await repo.update_run(run_id, workflow_phase=WorkflowPhase.DELEGATION.value)
         yield make_product_event(run_id, "run_log", {"phase": WorkflowPhase.DELEGATION.value})
 
-        tasks = [
-            (eid, obj) for eid, obj in _parse_expert_tasks(plan)
-            if eid in allowed_experts
-        ]
+        tasks, notes = select_expert_tasks(
+            plan, allowed_experts=allowed_experts, user_experts=user_experts
+        )
+        for note in notes:
+            yield make_product_event(run_id, "run_log", {"note": "expert_selection", "detail": note})
         if not tasks:
-            fallback_id = allowed_experts[0]
-            tasks = [(fallback_id, DEFAULT_EXPERT_TASKS[fallback_id])]
+            raise ValueError(
+                "专家选择结果为空（allowed_experts/user_experts 与计划无交集）"
+            )
         # 计划之后的第一次上下文编译：版本 = 计划版本 + 1
         context_version = plan.plan_version + 1
 
-        packets = []
+        jobs: list[ExpertJob] = []
         for i, (expert_id, objective) in enumerate(tasks, start=1):
             packet = build_expert_task_packet(
                 task_id=f"task-{expert_id}-{i}",
@@ -454,7 +507,10 @@ class DecisionWorkflow:
                 plan=plan,
                 context_version=context_version,
             )
-            packets.append(packet)
+            jobs.append(ExpertJob(
+                packet=packet,
+                context=compile_child_context(packet, decision=self.decision, plan=plan),
+            ))
             yield make_product_event(
                 run_id, "agent_task_created",
                 {"agent_id": expert_id, "task_id": packet.task_id,
@@ -466,19 +522,14 @@ class DecisionWorkflow:
             run_id, "run_log", {"phase": WorkflowPhase.EXPERT_LOOPS.value}
         )
 
-        results: list[SubAgentResult] = []
-        for packet in packets:
-            context = compile_child_context(
-                packet, decision=self.decision, plan=plan
-            )
-            runner = ExpertAgentRunner(
-                run_id=run_id, packet=packet, context=context,
-                runtime=runtime, repo=repo,
-            )
-            async for event in runner.run():
-                yield event
-            if runner.outcome is not None:
-                results.append(runner.outcome.result)
+        scheduler = ExpertScheduler(
+            run_id=run_id, runtime=runtime, repo=repo,
+            max_concurrency=max_concurrency,
+        )
+        self.expert_scheduler = scheduler  # 供 cancel 集成（API 层）
+        async for event in scheduler.run_all(jobs):
+            yield event
+        results = [o.result for o in scheduler.outcomes]
 
         # Root 观察：只喂结构化摘要，绝不吸收 Child 原始历史（spec §13.3）
         observation = root_observation(results)

@@ -114,6 +114,16 @@ class FakeAgentRuntime:
     ) -> None:
         self.calls.append(("resume_session", session_id))
         if session_id not in self._sessions:
+            if runtime_thread_id:
+                # 与真实 Runtime 对齐：从持久化线程重建会话（follow-up 场景）
+                self._sessions[session_id] = {
+                    "instructions": "",
+                    "resumed": True,
+                    "compacted": 0,
+                    "resumed_thread_id": runtime_thread_id,
+                }
+                self._turn_index.setdefault(session_id, 0)
+                return
             raise AgentRuntimeError(
                 "session_not_found",
                 f"会话 {session_id} 不存在，无法恢复",
@@ -135,8 +145,8 @@ class FakeAgentRuntime:
     async def close_session(self, session_id: str) -> None:
         self.calls.append(("close_session", session_id))
         self._sessions.pop(session_id, None)
-        self._turn_index.pop(session_id, None)
         self._live_turns.pop(session_id, None)
+        # 保留 _turn_index：resume 后的下一轮是 follow-up，不重放旧脚本
 
     # ---- 轮次 ----
 
@@ -174,6 +184,10 @@ class FakeAgentRuntime:
         self._live_turns[session_id] = False
 
     # ---- 测试辅助 ----
+
+    def runtime_thread_id(self, session_id: str) -> str | None:
+        """与 CodexAgentRuntime 对齐：返回可持久化的线程句柄（Fake 用伪 id）。"""
+        return f"fake-thread:{session_id}" if session_id in self._sessions else None
 
     def session_state(self, session_id: str) -> dict[str, Any] | None:
         return self._sessions.get(session_id)

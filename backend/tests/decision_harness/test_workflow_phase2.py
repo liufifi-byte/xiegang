@@ -64,12 +64,13 @@ def _chair_script(sid_main: str, sid_eco: str, *, eco_payloads: list[dict]):
     })
 
 
-async def _full_run(fake, repo, run_id="run1"):
+async def _full_run(fake, repo, run_id="run1", allowed=("economist",)):
     wf = DecisionWorkflow(run_id=run_id, decision=DECISION, budget=BUDGET,
                           runtime=fake, repo=repo)
     plan_events = [e async for e in wf.run()]
     assert wf.outcome.status == "planned"
-    expert_events = [e async for e in wf.run_experts()]
+    # Phase 2 切片语义：显式只放经济学家（Phase 3 起默认八人 + 3-5 位收敛）
+    expert_events = [e async for e in wf.run_experts(allowed_experts=allowed)]
     return wf, plan_events + expert_events
 
 
@@ -139,13 +140,13 @@ async def test_root_never_receives_child_raw_history():
 
 async def test_single_child_failure_does_not_fail_root_run():
     run_id = "run1"
-    # 计划里塞两个 economist 任务：第一个永远说胡话（failed），第二个正常
+    # 两个不同专家：经济学家全程说胡话（failed），心理学家正常完成
     plan2 = dict(PLAN_DICT, expert_tasks=[
         "economist: 现金流压力测试与机会成本核算",
-        "economist: 隐性生活成本与激励一致性评估",
+        "psychologist: 动机一致性与执行心理风险评估",
     ])
-    sid_main, sid_eco1, sid_eco2 = (
-        f"{run_id}:main", "run1:expert:task-economist-1", "run1:expert:task-economist-2"
+    sid_main, sid_eco, sid_psy = (
+        f"{run_id}:main", "run1:expert:task-economist-1", "run1:expert:task-psychologist-2"
     )
     nonsense = RuntimeEvent(seq=0, type="turn_final", payload={"final_response": "嗯"})
     fake = FakeAgentRuntime(scripts={
@@ -153,14 +154,14 @@ async def test_single_child_failure_does_not_fail_root_run():
             [_turn_final({"action": "revise_plan", "payload": {"plan": plan2}})],
             [_turn_final({"ack": True})],
         ],
-        sid_eco1: [[nonsense]] * 3,  # 2 轮预算 + 1 强制收敛，全部无效 → failed
-        sid_eco2: [[_turn_final({
+        sid_eco: [[nonsense]] * 3,  # 2 轮预算 + 1 强制收敛，全部无效 → failed
+        sid_psy: [[_turn_final({
             "status": "completed", "stance": "cautious",
-            "judgment": "激励不一致风险中等", "confidence": 0.6,
+            "judgment": "动机一致性中等偏低", "confidence": 0.6,
         })]],
     })
     repo = DecisionRunRepository(force_memory=True)
-    wf, events = await _full_run(fake, repo)
+    wf, events = await _full_run(fake, repo, allowed=("economist", "psychologist"))
 
     types = [e["event_type"] for e in events]
     assert "agent_failed" in types and "agent_completed" in types
@@ -169,7 +170,8 @@ async def test_single_child_failure_does_not_fail_root_run():
     summary = row["decision_state"]["expert_results_summary"]
     assert summary == {"total": 2, "completed": 1, "partial": 0,
                        "silent": 0, "failed": 1}
-    assert [r.status for r in wf.expert_results] == ["failed", "completed"]
+    by_id = {r.agent_id: r.status for r in wf.expert_results}
+    assert by_id == {"economist": "failed", "psychologist": "completed"}
 
 
 async def test_run_experts_requires_plan():
