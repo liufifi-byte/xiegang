@@ -98,6 +98,9 @@ def translate_request(body: dict[str, Any]) -> dict[str, Any]:
         "messages": messages,
         "stream": True,
         "stream_options": {"include_usage": True},
+        # GLM-5.x 默认开思考：小预算下 reasoning 吃光 token 导致空回复
+        # （实测 glm-5.1）。Agent 循环不需要外显推理，一律关闭。
+        "thinking": {"type": "disabled"},
     }
     if body.get("max_output_tokens") is not None:
         chat["max_tokens"] = body["max_output_tokens"]

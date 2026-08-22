@@ -153,8 +153,15 @@ class DecisionRunRepository:
             UPDATE decision_runs SET {assignments}, updated_at = now()
             WHERE id = %s
         """
+        # JSONB 列（decision_state/active_plan/budget/usage/finalization_state）
+        # 必须序列化——psycopg 不直接适配 dict（真库模式曾在此翻车）
+        values = [
+            json.dumps(v, ensure_ascii=False, default=str)
+            if isinstance(v, (dict, list)) else v
+            for v in fields.values()
+        ]
         await asyncio.to_thread(
-            self._exec, sql, [*fields.values(), _db_id(run_id)]
+            self._exec, sql, [*values, _db_id(run_id)]
         )
 
     async def get_run(self, run_id: str) -> dict[str, Any] | None:

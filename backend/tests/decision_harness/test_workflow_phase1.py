@@ -169,8 +169,11 @@ async def test_deferred_actions_logged_not_executed():
     sid = "run1:main"
     fake = FakeAgentRuntime(scripts={
         sid: [
+            # 计划前的委托被守卫忽略并提醒
+            [_turn_final_event("delegate_agent", {"task": {"expert_id": "economist"}})],
+            [_turn_final_event("revise_plan", {"plan": _plan_payload(1)})],
             [_turn_final_event("start_debate", {"dispute_id": "d1"})],
-            [_turn_final_event("finalize")],
+            # 计划后的委托才登记 pending_phase2
             [_turn_final_event("delegate_agent", {"task": {"expert_id": "economist"}})],
             [_turn_final_event("ask_user", {"questions": ["补充信息？"]})],
         ],
@@ -181,18 +184,85 @@ async def test_deferred_actions_logged_not_executed():
     events = await _collect(wf)
 
     assert wf.outcome.status == "waiting_user"
-    assert set(wf.outcome.deferred) == {"start_debate", "finalize"}
-    deferred_notes = [e for e in events
-                      if e["event_type"] == "run_log" and e["payload"].get("note") == "action_deferred"]
-    assert {n["payload"]["action"] for n in deferred_notes} == {"start_debate", "finalize"}
-
-    # delegate_agent 登记为 pending_phase2 的 agent_runs 行
+    notes = [e["payload"].get("note") for e in events if e["event_type"] == "run_log"]
+    assert "delegate_before_plan_ignored" in notes
+    deferred = [e["payload"].get("action") for e in events
+                if e["event_type"] == "run_log" and e["payload"].get("note") == "action_deferred"]
+    assert deferred == ["start_debate"]
     tasks = [e for e in events if e["event_type"] == "agent_task_created"]
     assert len(tasks) == 1
     agents = await repo.list_agent_runs("run1")
     expert_rows = [a for a in agents if a["agent_type"] == "expert"]
     assert len(expert_rows) == 1
     assert expert_rows[0]["status"] == "pending_phase2"
+
+
+async def test_plan_payload_shapes_normalized():
+    """真跑实测：GLM 把计划平铺在 payload、expert_tasks 用对象数组。"""
+    sid = "run1:main"
+    flat_payload = {
+        "plan_version": 1,
+        "objective": "两周内完成跳槽决策的信息收集与风险评估",
+        "expert_tasks": [
+            {"expert": "psychologist", "task": "动机一致性与逃避模式评估"},
+            {"expert": "contrarian", "objective": "构造最强反方论证"},
+        ],
+        "research_tasks": [{"topic": "行业薪酬基准"}],
+        "blocking_unknowns": ["期权行权条件"],
+        "created_from_state_version": 1,
+    }
+    fake = FakeAgentRuntime(scripts={
+        sid: [
+            [_turn_final_event("revise_plan", flat_payload)],  # 平铺形态
+            [_turn_final_event("ask_user", {"questions": ["q"]})],
+        ],
+    })
+    repo = DecisionRunRepository(force_memory=True)
+    wf = DecisionWorkflow(run_id="run1", decision=DECISION, budget=BUDGET,
+                          runtime=fake, repo=repo)
+    events = await _collect(wf)
+    assert wf.outcome.status == "waiting_user"
+    assert wf.outcome.plan is not None
+    assert wf.outcome.plan.expert_tasks[0] == "psychologist: 动机一致性与逃避模式评估"
+    assert wf.outcome.plan.expert_tasks[1] == "contrarian: 构造最强反方论证"
+    assert wf.outcome.plan.research_tasks == ["行业薪酬基准"]
+    assert any(e["event_type"] == "plan_created" for e in events)
+
+async def test_plan_real_shape_from_rollout():
+    """真跑 rollout 原始形态：payload.plan 嵌套 + 缺 created_from_state_version
+    + 超长 objective + 对象条目 —— 归一化后必须可接受。"""
+    sid = "run1:main"
+    real_shape = {
+        "action": "revise_plan",
+        "payload": {"plan": {
+            "plan_version": 1,
+            "objective": "构建多维度分析框架，使决策者掌握经济成本、心理摩擦、"
+                         "照护可行性、社会法律因素及配偶底线后做出有依据的选择。"
+                         "可验证标准：产出两方案在6个维度的对比矩阵+关键拐点条件+阶段性建议。" * 2,
+            "expert_tasks": [
+                {"expert": "economist", "task": "量化比较两方案 3-5 年总成本并给敏感性分析"},
+                {"expert": "psychologist", "task": "分析代际摩擦风险与试运行期设计"},
+                {"expert": "sociologist", "task": "社区支持网络与养老观念差异分析"},
+            ],
+            "blocking_unknowns": ["配偶底线", "父母意愿", "预算上限"],
+        }},
+    }
+    import json as _json
+    fake = FakeAgentRuntime(scripts={sid: [
+        [RuntimeEvent(seq=0, type="turn_final",
+                      payload={"final_response": _json.dumps(real_shape, ensure_ascii=False)})],
+        [_turn_final_event("ask_user", {"questions": ["q"]})],
+    ]})
+    repo = DecisionRunRepository(force_memory=True)
+    wf = DecisionWorkflow(run_id="run1", decision=DECISION, budget=BUDGET,
+                          runtime=fake, repo=repo)
+    events = await _collect(wf)
+    assert wf.outcome.plan is not None
+    assert len(wf.outcome.plan.objective) <= 300
+    assert wf.outcome.plan.created_from_state_version == 1
+    assert wf.outcome.plan.expert_tasks[0].startswith("economist: ")
+    assert any(e["event_type"] == "plan_created" for e in events)
+
 
 
 async def test_event_stream_replayable_and_schema_safe():

@@ -61,7 +61,7 @@ def aggregate(comparisons: list[dict[str, Any]]) -> dict[str, Any]:
     both = sum(1 for c in valid if c["both_completed"])
     strengths: list[str] = [
         c["shadow"]["recommendation_strength"]
-        for c in comparisons if c["shadow"]["recommendation_strength"]
+        for c in valid if c["shadow"]["recommendation_strength"]
     ]
     return {
         "runs": n,

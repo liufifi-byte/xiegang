@@ -1,0 +1,61 @@
+{
+  "aggregate": {
+    "runs": 2,
+    "both_completed": 2,
+    "both_completed_rate": 1.0,
+    "shadow_report_rate": 1.0,
+    "legacy_completed_rate": 1.0,
+    "shadow_avg_uncertainties": 0.0,
+    "strength_distribution": {
+      "clear": 2
+    }
+  },
+  "comparisons": [
+    {
+      "parliament_id": "ff43762e-ad56-43f9-a2c8-11aa6b74a5e8",
+      "legacy": {
+        "status": "done",
+        "completed": true,
+        "duration_seconds": 169,
+        "has_summary": true
+      },
+      "shadow": {
+        "status": "shadow_completed",
+        "exit_status": "PARTIAL_FINALIZED",
+        "has_final_report": true,
+        "recommendation_strength": "clear",
+        "remaining_uncertainties": 0,
+        "reversal_conditions": 10,
+        "stance_diversity": 3,
+        "expert_count": 5,
+        "evidence_count": 0
+      },
+      "both_completed": true,
+      "shadow_run_id": "3ffe1b0b-6d0c-4101-9d28-1562d0ebde96",
+      "shadow_duration_seconds": 658.0
+    },
+    {
+      "parliament_id": "e55554c7-7ea9-420d-9529-1015be4372f5",
+      "legacy": {
+        "status": "done",
+        "completed": true,
+        "duration_seconds": 186,
+        "has_summary": true
+      },
+      "shadow": {
+        "status": "shadow_completed",
+        "exit_status": "PARTIAL_FINALIZED",
+        "has_final_report": true,
+        "recommendation_strength": "clear",
+        "remaining_uncertainties": 0,
+        "reversal_conditions": 10,
+        "stance_diversity": 2,
+        "expert_count": 5,
+        "evidence_count": 0
+      },
+      "both_completed": true,
+      "shadow_run_id": "10519cd3-86c3-473f-940d-fe63f09220e8",
+      "shadow_duration_seconds": 590.5
+    }
+  ]
+}

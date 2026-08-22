@@ -64,6 +64,7 @@ def test_translate_request_full_shape():
 def test_translate_request_plain_string_input():
     chat = T.translate_request({"model": "m", "input": "直接文本"})
     assert chat["messages"] == [{"role": "user", "content": "直接文本"}]
+    assert chat["thinking"] == {"type": "disabled"}  # GLM-5.x 关思考（实测必需）
 
 
 # ============ chat_chunks_to_response_events ============

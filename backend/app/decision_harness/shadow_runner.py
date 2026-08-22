@@ -106,6 +106,7 @@ async def run_shadow(
         parliament_id=parliament_id,
         runtime_mode="shadow",
         pre_created=True,
+        auto_continue_without_user=True,
     )
     try:
         # 影子事件就地丢弃（§15.1 翻译层验证已由测试覆盖；用户不消费影子流）

@@ -46,11 +46,13 @@ CHAIR_INSTRUCTIONS = """你是"邪杠会议室"的决策主席（Decision Chair�
 每轮你只输出一个 JSON 对象（不要输出其他文本），结构为：
 {"action": "<动作名>", "payload": {...}}
 
-当前阶段允许的动作：
-- revise_plan    payload.plan 是研究计划（PlanSpec JSON）。计划被接受后才会进入专家阶段。
-- ask_user       payload.questions 是给用户的问题列表（缺少关键信息时用）。
-- delegate_agent payload.task 是专家任务描述（Phase 2 生效）。
-- request_research payload.topics 是需要核实的主题列表（Phase 2 生效）。
+当前阶段允许的动作（严格按此顺序）：
+1. revise_plan —— 你的第一个动作必须是它。payload.plan 是研究计划
+   （PlanSpec JSON）。没有计划，一切都不会开始。
+2. ask_user —— 仅当缺关键信息时；用户不可用时会被告知基于现有信息继续。
+3. delegate_agent / request_research —— 只在计划已给出之后才有意义；
+   计划未出时这两个动作会被忽略并收到系统提醒。
+重要：不要跳过 revise_plan 直接委托专家——委托不是计划。
 
 计划要求（PlanSpec）：objective 具体可验证；expert_tasks 只从八人库选
 （economist/psychologist/historian/mathematician/strategist/legal_scholar/
@@ -103,6 +105,49 @@ DEFAULT_EXPERT_TASKS = {
 # 补位顺序（计划专家不足 3 位时，按此顺序补到 MIN_EXPERTS）
 _PAD_ORDER = ("economist", "psychologist", "contrarian", "strategist",
               "mathematician", "historian", "legal_scholar", "sociologist")
+
+
+def _normalize_plan_body(payload: dict) -> dict:
+    """兼容主席输出的两种计划形态（真跑实测）：
+    ① {"action":"revise_plan","payload":{"plan":{...}}}（文档形态）
+    ② {"action":"revise_plan","payload":{...计划字段直接平铺}}（GLM 实际形态）
+    以及 expert_tasks 的字符串 / 对象两种条目。
+    """
+    body = payload.get("plan") if isinstance(payload.get("plan"), dict) else dict(payload)
+
+    def _task_str(entry):
+        if isinstance(entry, str):
+            return entry
+        if isinstance(entry, dict):
+            expert = entry.get("expert") or entry.get("expert_id") or entry.get("agent") or ""
+            task = entry.get("task") or entry.get("objective") or entry.get("goal") or ""
+            if expert and task:
+                return f"{expert}: {task}"
+            return str(task or "") or None
+        return None
+
+    tasks = [_task_str(e) for e in body.get("expert_tasks") or []]
+    body["expert_tasks"] = [t for t in tasks if t][:5]  # PlanSpec 上限
+    research = [
+        (r.get("topic") if isinstance(r, dict) else r)
+        for r in body.get("research_tasks") or []
+    ]
+    body["research_tasks"] = [str(r) for r in research if r][:20]
+
+    # 内部簿记字段模型不会给（真跑实测）：补默认
+    body.setdefault("created_from_state_version", 1)
+    if not isinstance(body.get("created_from_state_version"), int) or body["created_from_state_version"] < 1:
+        body["created_from_state_version"] = 1
+    if not isinstance(body.get("plan_version"), int) or body["plan_version"] < 1:
+        body["plan_version"] = 1
+    # objective 防御：去空白 + 截到契约上限
+    objective = str(body.get("objective") or "").strip()
+    body["objective"] = objective[:300]
+    for list_field in ("blocking_unknowns", "non_blocking_unknowns", "stop_conditions",
+                       "expected_conflicts"):
+        raw = body.get(list_field) or []
+        body[list_field] = [str(x) for x in raw][:10]
+    return body
 
 
 def select_expert_tasks(
@@ -207,6 +252,7 @@ class DecisionWorkflow:
         runtime_mode: str = "codex_harness",
         resume: bool = False,
         pre_created: bool = False,
+        auto_continue_without_user: bool = False,
     ):
         self.run_id = run_id
         self.decision = decision
@@ -218,6 +264,9 @@ class DecisionWorkflow:
         self.resume = resume
         # 行已由调用方预建（shadow runner 等）：容忍 create_run 幂等返回 False
         self.pre_created = pre_created
+        # 影子模式：ask_user 不终止，注入"用户不可用"观察后继续
+        self.auto_continue_without_user = auto_continue_without_user
+        self._pending_observation: str | None = None
         self.outcome: WorkflowOutcome | None = None
 
     def _finish(self, outcome: WorkflowOutcome) -> WorkflowOutcome:
@@ -287,6 +336,9 @@ class DecisionWorkflow:
                 self.decision, self.budget,
                 turn=turn, resume=self.resume and turn == 0,
             )
+            if self._pending_observation:
+                prompt += f"\n\n{self._pending_observation}"
+                self._pending_observation = None
             final_response: str | None = None
             async for event in runtime.start_turn(session_id, prompt):
                 translated = translate_runtime_event(run_id, event)
@@ -359,7 +411,7 @@ class DecisionWorkflow:
 
             if action == MainAgentAction.REVISE_PLAN:
                 try:
-                    plan = PlanSpec.model_validate(request.payload.get("plan") or {})
+                    plan = PlanSpec.model_validate(_normalize_plan_body(request.payload))
                     version = plan.plan_version
                     if latest_plan is not None and version <= latest_plan.plan_version:
                         version = latest_plan.plan_version + 1
@@ -396,10 +448,19 @@ class DecisionWorkflow:
 
             if action == MainAgentAction.ASK_USER:
                 questions = request.payload.get("questions") or []
-                await repo.update_run(run_id, status="waiting_user")
                 yield make_product_event(
                     run_id, "user_input_requested", {"questions": questions}
                 )
+                if self.auto_continue_without_user:
+                    # 影子模式无真实用户：记录问题，注入观察让主席继续
+                    self._pending_observation = (
+                        "【用户暂不可用（影子模式）】以上问题无法得到回答。"
+                        "请基于现有信息继续：把无法确认的点写进计划的 "
+                        "blocking_unknowns，并给出当前信息下的最优计划"
+                        "（revise_plan）。"
+                    )
+                    continue
+                await repo.update_run(run_id, status="waiting_user")
                 self._finish(WorkflowOutcome(
                     run_id=run_id, status="waiting_user", actions_taken=actions_taken,
                     plan=latest_plan, deferred=deferred,
@@ -407,6 +468,18 @@ class DecisionWorkflow:
                 return
 
             if action == MainAgentAction.DELEGATE_AGENT:
+                if latest_plan is None:
+                    # 计划未出：委托无效——提醒主席先出计划（不登记 pending 行）
+                    self._pending_observation = (
+                        "【系统】尚未收到 revise_plan，该委托暂不生效。"
+                        "请立即输出 revise_plan（PlanSpec JSON），"
+                        "专家任务写在计划的 expert_tasks 里。"
+                    )
+                    yield make_product_event(
+                        run_id, "run_log",
+                        {"note": "delegate_before_plan_ignored"},
+                    )
+                    continue
                 agent_run_id = f"{run_id}:agent:{actions_taken}"
                 await repo.upsert_agent_run(
                     agent_run_id,
@@ -428,6 +501,11 @@ class DecisionWorkflow:
                     {"note": "research_deferred",
                      "topics": request.payload.get("topics", [])[:5]},
                 )
+                if latest_plan is None:
+                    self._pending_observation = (
+                        "【系统】请先输出 revise_plan——研究主题应写在计划的 "
+                        "research_tasks / blocking_unknowns 里。"
+                    )
                 continue
 
         # 预算走完

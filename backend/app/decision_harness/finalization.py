@@ -204,7 +204,7 @@ def build_final_report(
     if not speaking:
         strength = "insufficient"
         option, summary = (
-            (decision_options[0] if decision_options else ""),
+            (decision_options[0] if decision_options else "暂无可推荐选项"),
             "专家阶段未产出可用结论，无法形成建议。",
         )
     else:

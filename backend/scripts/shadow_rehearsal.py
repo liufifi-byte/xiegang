@@ -80,6 +80,37 @@ def fetch_recent_parliaments(limit: int) -> list[dict]:
     return out
 
 
+def cleanup_prior_shadow(parliament_id: str) -> None:
+    """删除该议会的历史影子行（decision_runs.parliament_id 唯一约束）。
+
+    影子数据是可弃的对照产物；真实议会行（parliaments）绝不触碰。
+    """
+    from app.db import direct_db_url
+    import psycopg
+
+    with psycopg.connect(direct_db_url(), connect_timeout=30) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                DELETE FROM agent_runs WHERE decision_run_id IN
+                  (SELECT id FROM decision_runs WHERE parliament_id = %s)
+            """, (parliament_id,))
+            cur.execute("""
+                DELETE FROM plan_versions WHERE decision_run_id IN
+                  (SELECT id FROM decision_runs WHERE parliament_id = %s)
+            """, (parliament_id,))
+            cur.execute("""
+                DELETE FROM evidence_records WHERE decision_run_id IN
+                  (SELECT id FROM decision_runs WHERE parliament_id = %s)
+            """, (parliament_id,))
+            cur.execute("""
+                DELETE FROM debate_issues WHERE decision_run_id IN
+                  (SELECT id FROM decision_runs WHERE parliament_id = %s)
+            """, (parliament_id,))
+            cur.execute("DELETE FROM decision_runs WHERE parliament_id = %s",
+                        (parliament_id,))
+        conn.commit()
+
+
 def fetch_legacy_row(parliament_id: str) -> dict | None:
     from app.db import direct_db_url
     import psycopg
@@ -118,6 +149,7 @@ async def run_case(p: dict, port: int) -> dict:
         "topic_category": p.get("topic_category"),
         "user_background": p.get("user_background"),
     }
+    cleanup_prior_shadow(p["id"])
     logger.info("开始影子运行：%s topic=%r", p["id"], p["topic"][:60])
     started = time.monotonic()
     shadow_run_id = await run_shadow(p["id"], task)
