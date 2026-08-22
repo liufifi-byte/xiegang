@@ -341,6 +341,18 @@ Python SDK 侧用 `CodexConfig.codex_bin` 指向自建二进制（或发布自�
    `cargo build -p codex-cli && cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex`；
    测试 `just test`（cargo nextest，全量约 1.4 万标注）；打包 `just assemble-codex-package`；
    release `just build-for-release`（Bazel）。
-4. 每次同步 upstream 后的最小回归：`cargo check -p codex-app-server` →
-   app-server-test-client 握手 → 我们 Python 侧
+4. **构建纪律（磁盘受限开发机，2026-08-22 生效）**：
+   - 勘察只读搜索源码，不重复编译；
+   - 验证编译一律
+     `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo check -p codex-app-server`；
+   - 仅在确需启动二进制时执行一次
+     `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo build -p codex-app-server`，
+     不构建整个 workspace；
+   - 所有任务/子 Agent 共用本仓库默认 target 目录
+     （`codex-rs/target`），禁止另设 CARGO_TARGET_DIR；
+   - 每次构建前检查剩余空间，**低于 10GB 暂停并报告**；
+   - 不安装额外 Rust 工具链，固定 `rust-toolchain.toml` 的 1.95.0；
+   - 清理构建产物前先报告清单，不自行删除。
+5. 每次同步 upstream 后的最小回归：`CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0
+   cargo check -p codex-app-server` → app-server-test-client 握手 → 我们 Python 侧
    `tests/decision_harness/`（50 个，含 CodexAgentRuntime fake-client 全套）。

@@ -116,6 +116,7 @@ product   xiegang 主仓库                            （不变）
 ## 10. 如何固定版本
 
 - Fork 内：`rust-toolchain.toml`（1.95.0）+ `Cargo.lock` 随仓库提交；
+  开发机不安装额外工具链（默认已指向 1.95.0）；
 - 产品内：`CODEX_FORK_PIN`（§6）+ `openai-codex` SDK 版本钉死
   （若替换 `openai-codex-cli-bin`，则连 `sdk/python/pyproject.toml:19` 一起钉）；
 - CI：fork 的任何提交必须带与 pin 一致的 SHA 才允许产出部署工件。
