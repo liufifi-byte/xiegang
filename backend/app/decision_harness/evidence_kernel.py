@@ -153,11 +153,15 @@ class EvidenceKernel:
                  claim_id: str | None = None) -> EvidenceStatus:
         """写入证据并做即时评分（权威+时效）。返回落库后的状态。"""
         level = classify_authority(record.source_url or "", record.source_domain)
-        record = record.model_copy(update={
+        updates: dict = {
             "source_domain": record.source_domain or _domain_of(record.source_url),
-            "authority_level": level,
-            "reliability": max(record.reliability, _reliability_for(level)),
-        })
+        }
+        if record.kind == EvidenceKind.WEB_SOURCE:
+            # 权威性只对 web 来源有意义：按域名定层级与可靠性下限；
+            # inference/calculation/user_fact 保留声明值，交由审计裁决
+            updates["authority_level"] = level
+            updates["reliability"] = max(record.reliability, _reliability_for(level))
+        record = record.model_copy(update=updates)
         if record.kind == EvidenceKind.WEB_SOURCE:
             domain = self._claims[claim_id].domain if claim_id in self._claims else "general"
             if is_stale(record, domain=domain):

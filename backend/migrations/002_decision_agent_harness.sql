@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS decision_runs (
   usage JSONB,
   finalization_state JSONB,
   error TEXT,
+  exit_status TEXT,
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now(),
   finished_at TIMESTAMPTZ

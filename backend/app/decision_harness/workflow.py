@@ -35,6 +35,7 @@ from app.decision_harness.schemas import (
     MAX_EXPERTS,
     MIN_EXPERTS,
     PlanSpec,
+    RunExitStatus,
     SubAgentResult,
     WorkflowPhase,
 )
@@ -438,15 +439,22 @@ class DecisionWorkflow:
                 plan=latest_plan, deferred=deferred,
             ))
         else:
+            # §16：硬预算不得直接标记失败——进入 PARTIAL_FINALIZED
             await repo.update_run(
-                run_id, status="failed", error="budget_exhausted_without_plan"
+                run_id, status="partial_finalized",
+                exit_status=RunExitStatus.PARTIAL_FINALIZED.value,
+                error=None,
+                finalization_state={"budget_exhausted": True,
+                                    "stage": "planning"},
             )
             yield make_product_event(
-                run_id, "agent_failed",
-                {"agent": "main", "message": "预算耗尽仍未产出计划"},
+                run_id, "partial_finalized",
+                {"message": "计划预算耗尽，未形成研究计划",
+                 "remaining_uncertainties": self.decision.unknowns[:5]},
             )
             self._finish(WorkflowOutcome(
-                run_id=run_id, status="failed", actions_taken=actions_taken,
+                run_id=run_id, status="partial_finalized",
+                actions_taken=actions_taken,
                 error="budget_exhausted_without_plan", deferred=deferred,
             ))
 
@@ -707,3 +715,162 @@ class DecisionWorkflow:
             "narrowed": sum(1 for o in outcomes if o.dispute.status == "narrowed"),
             "retained": sum(1 for o in outcomes if o.dispute.status == "retained"),
         })
+
+    # ============================================================
+    # Phase 6：Evidence Audit → Finalization Gate → 最终报告
+    # ============================================================
+
+    async def run_finalize(
+        self,
+        *,
+        budget_exhausted: bool = False,
+        cancel_requested: bool = False,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """审计 → 修订 → 合成 → Gate 裁决（spec §7.5/§12.4/§16/§18）。
+
+        出口（§7.5）：FINALIZED / PARTIAL_FINALIZED / WAITING_USER /
+        CANCELLED。预算耗尽不再直接 failed——产出安全有限的阶段性报告。
+        """
+        from app.decision_harness.finalization import (
+            EvidenceAuditor,
+            GateInput,
+            build_final_report,
+            evaluate_gate,
+        )
+
+        run_id = self.run_id
+        results = getattr(self, "expert_results", None) or []
+        if not results:
+            rows = await self.repo.list_agent_runs(run_id)
+            results = [
+                SubAgentResult.model_validate(r["result"])
+                for r in rows
+                if r.get("agent_type") == "expert" and r.get("result")
+            ]
+        disputes_state = []
+        row = await self.repo.get_run(run_id)
+        if row and row.get("decision_state"):
+            disputes_state = row["decision_state"].get("disputes", [])
+        kernel = getattr(self, "evidence_kernel", None)
+        plan = (self.outcome.plan if self.outcome and self.outcome.plan else None) \
+            or (PlanSpec.model_validate(row["active_plan"])
+                if row and row.get("active_plan") else None)
+
+        # ---- Evidence Audit ----
+        await self.repo.update_run(run_id, workflow_phase=WorkflowPhase.EVIDENCE_AUDIT.value)
+        yield make_product_event(run_id, "run_log", {"phase": WorkflowPhase.EVIDENCE_AUDIT.value})
+        audit_passed = True
+        unverified_unknowns: list[str] = []
+        if kernel is not None:
+            auditor = EvidenceAuditor(
+                run_id=run_id, kernel=kernel, repo=self.repo,
+                core_claim_ids=[c.claim_id for c in kernel.claims],
+            )
+            async for event in auditor.run():
+                yield event
+            audit_passed = auditor.outcome.passed
+            if not auditor.outcome.passed:
+                # 定向修订已由 auditor 完成（拒绝+重算）；汇总未决 unknowns
+                await self.repo.update_run(
+                    run_id, workflow_phase=WorkflowPhase.TARGETED_REPAIR.value
+                )
+                yield make_product_event(run_id, "run_log", {
+                    "note": "targeted_repair",
+                    "rejected": auditor.outcome.rejected_ids,
+                })
+            unverified_unknowns = [
+                c.text for c in kernel.claims
+                if "unverified" == getattr(kernel.verdict(c.claim_id).status, "value",
+                                           str(kernel.verdict(c.claim_id).status))
+            ]
+
+        # ---- Synthesis ----
+        await self.repo.update_run(run_id, workflow_phase=WorkflowPhase.SYNTHESIS_LOOP.value)
+        yield make_product_event(run_id, "run_log", {"phase": WorkflowPhase.SYNTHESIS_LOOP.value})
+        needs_user = any(d.get("status") == "narrowed" for d in disputes_state) or bool(
+            results and any(r.questions_for_user for r in results if r.status == "silent")
+        )
+        pending_rows = [
+            r for r in await self.repo.list_agent_runs(run_id)
+            if r.get("status") == "pending_phase2"
+        ]
+        report = build_final_report(
+            decision_options=self.decision.options,
+            results=results,
+            disputes=disputes_state,
+            unknowns=unverified_unknowns + list(self.decision.unknowns),
+            gate_failures=[],
+            partial=budget_exhausted,
+        )
+        yield make_product_event(run_id, "finalization_proposed", {
+            "recommendation_strength": report.recommendation.strength,
+        })
+
+        # ---- Gate ----
+        await self.repo.update_run(run_id, workflow_phase=WorkflowPhase.FINALIZATION_GATE.value)
+        gate = evaluate_gate(GateInput(
+            decision_options=self.decision.options,
+            results=results,
+            open_disputes=sum(1 for d in disputes_state if d.get("status") == "open"),
+            needs_user=needs_user,
+            audit_passed=audit_passed,
+            pending_tasks=len(pending_rows),
+            report=report,
+            blocking_unknowns=list(plan.blocking_unknowns) if plan else [],
+            unverified_unknowns=unverified_unknowns,
+        ), budget_exhausted=budget_exhausted)
+        # CANCELLED：用户主动停止，保留已完成结果（不进 failed 分支）
+        if cancel_requested:
+            gate_status = RunExitStatus.CANCELLED
+        else:
+            gate_status = gate.status
+        if gate_status == RunExitStatus.PARTIAL_FINALIZED and not gate.failures:
+            report = build_final_report(
+                decision_options=self.decision.options,
+                results=results,
+                disputes=disputes_state,
+                unknowns=unverified_unknowns + list(self.decision.unknowns),
+                gate_failures=["budget_exhausted"],
+                partial=True,
+            )
+
+        status_map = {
+            RunExitStatus.FINALIZED: "finalized",
+            RunExitStatus.PARTIAL_FINALIZED: "partial_finalized",
+            RunExitStatus.WAITING_USER: "waiting_user",
+            RunExitStatus.CANCELLED: "cancelled",
+            RunExitStatus.FAILED: "failed",
+        }
+        run_status = status_map[gate_status]
+        final_event = {
+            RunExitStatus.FINALIZED: "decision_finalized",
+            RunExitStatus.PARTIAL_FINALIZED: "partial_finalized",
+        }.get(gate_status)
+
+        state = dict(row.get("decision_state") or {}) if row else {}
+        state["final_report"] = report.model_dump(mode="json")
+        state["gate_failures"] = gate.failures
+        await self.repo.update_run(
+            run_id, decision_state=state, status=run_status,
+            exit_status=gate_status.value,
+            finalization_state={"failures": gate.failures,
+                                "budget_exhausted": budget_exhausted},
+        )
+        self.final_report = report
+        self.exit_status = gate_status
+        if final_event:
+            yield make_product_event(run_id, final_event, {
+                "recommendation": report.recommendation.option[:200],
+                "strength": report.recommendation.strength,
+                "uncertainties": len(report.remaining_uncertainties),
+            })
+        elif gate_status == RunExitStatus.WAITING_USER:
+            yield make_product_event(run_id, "user_input_requested", {
+                "questions": [
+                    q for r in results for q in r.questions_for_user
+                ][:3] or ["请补充会改变建议的关键信息。"],
+            })
+        else:
+            yield make_product_event(run_id, "run_log", {
+                "note": "run_cancelled", "preserved_results": len(results),
+            })

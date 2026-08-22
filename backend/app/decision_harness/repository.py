@@ -36,6 +36,7 @@ _RUN_COLUMNS = {
     "usage",
     "finalization_state",
     "error",
+    "exit_status",
     "finished_at",
 }
 
