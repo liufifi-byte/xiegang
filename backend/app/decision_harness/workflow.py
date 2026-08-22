@@ -27,6 +27,8 @@ from app.decision_harness.repository import DecisionRunRepository
 from app.decision_harness.runtime import AgentRuntime, AgentRuntimeError
 from app.decision_harness.scheduler import ExpertJob, ExpertScheduler
 from app.decision_harness.schemas import (
+    ConflictType,
+    DisputeIssue,
     BudgetPolicy,
     DecisionModel,
     EXPERT_IDS,
@@ -611,6 +613,38 @@ class DecisionWorkflow:
         tasks, notes = select_expert_tasks(
             plan, allowed_experts=allowed_experts, user_experts=user_experts
         )
+        # 主席委托对账（彩排复盘：手动委托的 pending 行毒化终审 Gate）：
+        # 同专家已被计划覆盖 → 标记 superseded；计划没覆盖且有余量 → 并入执行
+        planned_ids = {eid for eid, _ in tasks}
+        # 合并委托时沿用其原 task_id（脚本/线程/agent 行对得上，账目单一）
+        merged_task_ids: dict[str, str] = {}
+        pending_rows = [
+            r for r in await repo.list_agent_runs(run_id)
+            if r.get("agent_type") == "expert" and r.get("status") == "pending_phase2"
+        ]
+        for row in pending_rows:
+            eid = row.get("expert_id") or ""
+            raw = (row.get("task_packet") or {}).get("raw") or {}
+            objective = ""
+            if isinstance(raw, dict):
+                t = raw.get("task")
+                if isinstance(t, dict):
+                    objective = str(t.get("task") or t.get("objective") or "")[:300]
+                else:
+                    objective = str(t or raw.get("objective") or "")[:300]
+            if eid in planned_ids or eid not in allowed_experts \
+                    or eid not in EXPERT_IDS or len(objective) < 10 \
+                    or len(tasks) >= MAX_EXPERTS:
+                await repo.upsert_agent_run(
+                    row["id"], decision_run_id=run_id, agent_type="expert",
+                    expert_id=eid, status="superseded_by_plan",
+                )
+                notes.append(f"superseded_delegate:{eid}")
+            else:
+                tasks.append((eid, objective))
+                planned_ids.add(eid)
+                merged_task_ids[eid] = str(row.get("task_id") or f"task-{eid}-merged")
+                notes.append(f"merged_delegate:{eid}")
         for note in notes:
             yield make_product_event(run_id, "run_log", {"note": "expert_selection", "detail": note})
         if not tasks:
@@ -623,7 +657,7 @@ class DecisionWorkflow:
         jobs: list[ExpertJob] = []
         for i, (expert_id, objective) in enumerate(tasks, start=1):
             packet = build_expert_task_packet(
-                task_id=f"task-{expert_id}-{i}",
+                task_id=merged_task_ids.get(expert_id) or f"task-{expert_id}-{i}",
                 expert_id=expert_id,
                 objective=objective,
                 decision=self.decision,
@@ -723,13 +757,23 @@ class DecisionWorkflow:
             raise ValueError("run_research 需要先完成计划（先跑 run_to_plan）")
 
         if claims is None:
+            # 方案一：待确认项分流（claim_router）——用户型转"问用户"，
+            # 事实型才进搜索。彩排复盘：用户型问题上网搜=导购软文+永远 PARTIAL。
+            from app.decision_harness.claim_router import split_unknowns
+
+            user_unknowns, fact_unknowns = split_unknowns(
+                [t for t in plan.blocking_unknowns if t and len(t) >= 2]
+            )
             claims = [
                 Claim(claim_id=f"claim-{i}", text=text, domain="general")
-                for i, text in enumerate(
-                    list(plan.blocking_unknowns) + list(plan.research_tasks), start=1
-                )
+                for i, text in enumerate(fact_unknowns + list(plan.research_tasks), start=1)
                 if text and len(text) >= 6
             ]
+            if user_unknowns:
+                row0 = await self.repo.get_run(run_id)
+                state0 = dict(row0.get("decision_state") or {}) if row0 else {}
+                state0["questions_for_user"] = user_unknowns[:8]
+                await self.repo.update_run(run_id, decision_state=state0)
         kernel = getattr(self, "evidence_kernel", None) or EvidenceKernel(run_id=run_id)
         self.evidence_kernel = kernel
 
@@ -779,6 +823,39 @@ class DecisionWorkflow:
         yield make_product_event(run_id, "run_log", {"phase": WorkflowPhase.DISPUTE_EXTRACTION.value})
 
         disputes = structural_disputes(results)
+        if not disputes:
+            # 立场多样性兜底（彩排复盘：全员 cautious、辩论永不点火）：
+            # 存在非支持立场但零 support 时，合成一次"支持方缺席检验"——
+            # 让最自信的谨慎者 steelman 支持方，强制制造一次对立供辩论检验。
+            speaking = [r for r in results
+                        if r.status in ("completed", "partial") and r.judgment.strip()]
+            supports = [r for r in speaking if r.stance == "support"]
+            non_supports = [r for r in speaking if r.stance != "support"]
+            if not supports and len(non_supports) >= 2:
+                steeler = max(non_supports, key=lambda r: r.confidence)
+                challenger = max(
+                    (r for r in non_supports if r.agent_id != steeler.agent_id),
+                    key=lambda r: r.confidence, default=None,
+                )
+                if challenger is not None:
+                    disputes = [DisputeIssue(
+                        dispute_id="dispute-steelman",
+                        question=(
+                            "支持方缺席检验：假如该决策的最强支持论证成立，"
+                            "需要满足哪些条件？这些条件现实可达吗？"
+                        ),
+                        importance=0.5,
+                        conflict_type=ConflictType.ASSUMPTION_CONFLICT,
+                        claims=[
+                            {"agent_id": steeler.agent_id, "stance": steeler.stance,
+                             "claim": steeler.judgment[:200]},
+                        ],
+                        participants=[steeler.agent_id, challenger.agent_id],
+                        missing_variable="支持方成立所需的前提条件",
+                        status="open", round=0,
+                    )]
+                    yield make_product_event(run_id, "run_log",
+                                             {"note": "steelman_dispute_synthesized"})
         if not disputes:
             await self.repo.update_run(run_id, workflow_phase=WorkflowPhase.DEBATE_LOOP.value)
             yield make_product_event(run_id, "run_log", {"note": "no_material_disputes"})
@@ -923,6 +1000,11 @@ class DecisionWorkflow:
 
         # ---- Gate ----
         await self.repo.update_run(run_id, workflow_phase=WorkflowPhase.FINALIZATION_GATE.value)
+        from app.decision_harness.claim_router import split_unknowns
+
+        fact_gaps = split_unknowns(
+            [t for t in (plan.blocking_unknowns if plan else []) if t]
+        )[1]
         gate = evaluate_gate(GateInput(
             decision_options=self.decision.options,
             results=results,
@@ -931,7 +1013,7 @@ class DecisionWorkflow:
             audit_passed=audit_passed,
             pending_tasks=len(pending_rows),
             report=report,
-            blocking_unknowns=list(plan.blocking_unknowns) if plan else [],
+            blocking_unknowns=fact_gaps,  # 用户型缺口走 questions_for_user，不拦 Gate
             unverified_unknowns=unverified_unknowns,
         ), budget_exhausted=budget_exhausted)
         # CANCELLED：用户主动停止，保留已完成结果（不进 failed 分支）

@@ -22,8 +22,9 @@ from app.decision_harness.expert_loop import ExpertAgentRunner, ExpertRunOutcome
 from app.decision_harness.repository import DecisionRunRepository
 from app.decision_harness.runtime import AgentRuntime
 
-# spec §16.2：同一会议默认最多 3 个活跃 Child Agent
-DEFAULT_MAX_CONCURRENCY = 3
+# §16.2 原为 3；2026-08-22 提速调整（glm-5.1 并发额度 10，彩排实测 429=0）：
+# 5 专家 + 主席 + 偶发重试仍有余量
+DEFAULT_MAX_CONCURRENCY = 5
 
 
 @dataclass

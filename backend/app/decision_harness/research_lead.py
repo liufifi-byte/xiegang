@@ -198,96 +198,21 @@ class ResearchLead:
         outcome = ResearchOutcome(claims_total=len(claims))
         for claim in claims:
             self.kernel.add_claim(claim)
-        for claim in claims:
-            template = _QUERY_TEMPLATES.get(claim.domain, _QUERY_TEMPLATES["general"])
-            query = template.format(claim=claim.text)[:120]
-            hits: list[SearchHit] = []
-            degraded_this_claim = False
-            for round_no in range(max(1, self.max_rounds)):
-                try:
-                    batch = await asyncio.wait_for(
-                        self.provider.search(query, max_results=4),
-                        timeout=_SEARCH_TIMEOUT_SECONDS,
-                    )
-                except Exception:
-                    if round_no == 0:
-                        outcome.degraded = True
-                        degraded_this_claim = True
-                    break
-                hits.extend(batch)
-                # 第一轮有结果即可（第二轮留给后续 follow-up 轮）
-                if batch:
-                    break
+        # 方案四：claim 级并行（信号量 3）——串行研究是彩排提速最大瓶颈；
+        # 事件按 claim 顺序回放，保证重放确定性
+        sem = asyncio.Semaphore(3)
 
-            if degraded_this_claim or not hits:
-                yield self._event("run_log", {
-                    "note": "research_degraded",
-                    "claim_id": claim.claim_id,
-                    "detail": "search_unavailable" if degraded_this_claim else "no_hits",
-                })
-                continue
+        async def _research_one(claim: Claim) -> list[dict[str, Any]]:
+            async with sem:
+                events: list[dict[str, Any]] = []
+                async for ev in self._research_claim(claim, outcome):
+                    events.append(ev)
+                return events
 
-            # 只保留不同域名的前 3 条（多样性优先于数量）
-            seen_domains: set[str] = set()
-            selected: list[SearchHit] = []
-            for hit in hits:
-                domain = urlparse(hit.url).netloc.lower()
-                if domain in seen_domains:
-                    continue
-                seen_domains.add(domain)
-                selected.append(hit)
-                if len(selected) >= 3:
-                    break
-
-            for i, hit in enumerate(selected, start=1):
-                # run 前缀保证全局唯一（evidence_records.id 是全局 TEXT 主键，
-                # 跨场同 ID 会撞 pkey——批量彩排实测三连翻车点）；场内确定性幂等
-                evidence_id = f"ev-{self.run_id[:8]}-{claim.claim_id}-{i}"
-                fetched = await self.provider.fetch(hit.url)
-                record = EvidenceRecordV4(
-                    id=evidence_id,
-                    claim_id=claim.claim_id,
-                    kind=EvidenceKind.WEB_SOURCE,
-                    source_url=hit.url,
-                    source_title=hit.title or hit.url,
-                    excerpt=(fetched or hit.snippet or "")[:_MAX_EXCERPT_CHARS],
-                    retrieved_at=datetime.now(timezone.utc),
-                    supports_claim=claim.text[:500],
-                )
-                status = self.kernel.register(record, claim_id=claim.claim_id)
-                stored = self.kernel.get(evidence_id) or record
-                await self._persist(stored)
-                outcome.evidence_written += 1
-                if status in (EvidenceStatus.VERIFIED, EvidenceStatus.CORROBORATED):
-                    yield self._event("evidence_added", {
-                        "claim_id": claim.claim_id,
-                        "evidence_id": evidence_id,
-                        "source_domain": stored.source_domain,
-                        "status": status.value,
-                    })
-                else:
-                    yield self._event("evidence_rejected", {
-                        "claim_id": claim.claim_id,
-                        "evidence_id": evidence_id,
-                        "reason": status.value,
-                    })
-
-            verdict = self.kernel.verdict(claim.claim_id)
-            if verdict.status == EvidenceStatus.CORROBORATED:
-                outcome.corroborated += 1
-            elif verdict.status == EvidenceStatus.VERIFIED:
-                outcome.verified += 1
-            elif verdict.status == EvidenceStatus.DISPUTED:
-                outcome.disputed += 1
-            else:
-                outcome.unverified += 1
-            yield self._event("run_log", {
-                "note": "claim_verdict",
-                "claim_id": claim.claim_id,
-                "status": verdict.status.value,
-                "detail": verdict.note,
-            })
-
+        gathered = await asyncio.gather(*[_research_one(c) for c in claims])
+        for events in gathered:
+            for ev in events:
+                yield ev
         self.outcome = outcome
         yield self._event("run_log", {
             "note": "research_complete",
@@ -296,4 +221,100 @@ class ResearchLead:
             "corroborated": outcome.corroborated,
             "unverified": outcome.unverified,
             "degraded": outcome.degraded,
+        })
+
+    async def _research_claim(
+        self, claim: Claim, outcome: ResearchOutcome
+    ) -> AsyncIterator[dict[str, Any]]:
+        """单个 claim 的 §12.3 搜索循环（原串行主体拆出）。"""
+        template = _QUERY_TEMPLATES.get(claim.domain, _QUERY_TEMPLATES["general"])
+        query = template.format(claim=claim.text)[:120]
+        hits: list[SearchHit] = []
+        degraded_this_claim = False
+        for round_no in range(max(1, self.max_rounds)):
+            try:
+                batch = await asyncio.wait_for(
+                    self.provider.search(query, max_results=4),
+                    timeout=_SEARCH_TIMEOUT_SECONDS,
+                )
+            except Exception:
+                if round_no == 0:
+                    outcome.degraded = True
+                    degraded_this_claim = True
+                break
+            hits.extend(batch)
+            # 第一轮有结果即可（第二轮留给后续 follow-up 轮）
+            if batch:
+                break
+
+        if degraded_this_claim or not hits:
+            yield self._event("run_log", {
+                "note": "research_degraded",
+                "claim_id": claim.claim_id,
+                "detail": "search_unavailable" if degraded_this_claim else "no_hits",
+            })
+            outcome.unverified += 1
+            yield self._event("run_log", {
+                "note": "claim_verdict", "claim_id": claim.claim_id,
+                "status": "unverified", "detail": "no_usable_evidence",
+            })
+            return
+
+        # 只保留不同域名的前 3 条（多样性优先于数量）
+        seen_domains: set[str] = set()
+        selected: list[SearchHit] = []
+        for hit in hits:
+            domain = urlparse(hit.url).netloc.lower()
+            if domain in seen_domains:
+                continue
+            seen_domains.add(domain)
+            selected.append(hit)
+            if len(selected) >= 3:
+                break
+
+        for i, hit in enumerate(selected, start=1):
+            evidence_id = f"ev-{self.run_id[:8]}-{claim.claim_id}-{i}"
+            fetched = await self.provider.fetch(hit.url)
+            record = EvidenceRecordV4(
+                id=evidence_id,
+                claim_id=claim.claim_id,
+                kind=EvidenceKind.WEB_SOURCE,
+                source_url=hit.url,
+                source_title=hit.title or hit.url,
+                excerpt=(fetched or hit.snippet or "")[:_MAX_EXCERPT_CHARS],
+                retrieved_at=datetime.now(timezone.utc),
+                supports_claim=claim.text[:500],
+            )
+            status = self.kernel.register(record, claim_id=claim.claim_id)
+            stored = self.kernel.get(evidence_id) or record
+            await self._persist(stored)
+            outcome.evidence_written += 1
+            if status in (EvidenceStatus.VERIFIED, EvidenceStatus.CORROBORATED):
+                yield self._event("evidence_added", {
+                    "claim_id": claim.claim_id,
+                    "evidence_id": evidence_id,
+                    "source_domain": stored.source_domain,
+                    "status": status.value,
+                })
+            else:
+                yield self._event("evidence_rejected", {
+                    "claim_id": claim.claim_id,
+                    "evidence_id": evidence_id,
+                    "reason": status.value,
+                })
+
+        verdict = self.kernel.verdict(claim.claim_id)
+        if verdict.status == EvidenceStatus.CORROBORATED:
+            outcome.corroborated += 1
+        elif verdict.status == EvidenceStatus.VERIFIED:
+            outcome.verified += 1
+        elif verdict.status == EvidenceStatus.DISPUTED:
+            outcome.disputed += 1
+        else:
+            outcome.unverified += 1
+        yield self._event("run_log", {
+            "note": "claim_verdict",
+            "claim_id": claim.claim_id,
+            "status": verdict.status.value,
+            "detail": verdict.note,
         })
