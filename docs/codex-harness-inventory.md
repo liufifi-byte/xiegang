@@ -238,6 +238,9 @@
   读 `StoredThread` → `InitialHistory::Resumed` 重建 Session
   （`app-server/src/request_processors/thread_processor.rs:3524-3598`），并恢复持久化的
   approval/permission 设置。损坏的 SQLite 会被备份重建（lib.rs:1228-1299）。
+  **Phase 2 实测补充**：thread/start 惰性——零 turn 时 rollout 不落盘，
+  resume 报 "no rollout found"；首个 turn 终结才 flush（真实运行的线程
+  一定有 turn，故不影响生产恢复链路）。
 - **错误恢复**：JSON-RPC 错误码 -32600/-32601/-32602/-32603/-32001（overloaded，客户端应
   指数退避重试）；请求按 serialization scope 排队（同线程 turn/start 与 interrupt 严格按序）；
   **transport 断连不杀线程**——idle 30 分钟才卸载（thread_lifecycle.rs:7），期间 resume 可
@@ -258,7 +261,7 @@
 | spawn_agent 多代理 v1/v2 + AgentControl | Scheduler 底座（并发上限、深度上限、预算） |
 | network-proxy 域名白名单 | 搜索域收口 |
 | Dynamic Tools（客户端执行） | decision.ask_user / evidence.write 等业务工具可先走这条路 |
-| Python SDK `CodexConfig.codex_bin + config_overrides` | 直接指向自建二进制，SDK 零改动 |
+| Python SDK `CodexConfig(launch_args_override=...)` | 直接启动自建 app-server 二进制（实测：独立二进制不能用 `codex_bin=`，SDK 会追加 `app-server` 子命令） |
 
 ## 12. 可通过扩展实现的部分（不动 core）
 
@@ -324,7 +327,8 @@ codex-fork/（深墨下游 Fork）
 
 产品仓库 `xiegang/`：`backend/app/decision_harness/`（已建：schemas/runtime/codex_runtime/
 repository/event_bridge/workflow + migration 002）继续作为 Adapter 与业务控制面；
-Python SDK 侧用 `CodexConfig.codex_bin` 指向自建二进制（或发布自有
+Python SDK 侧用 `CodexConfig(launch_args_override=(BIN, "--listen", "stdio://"))`
+启动自建 app-server 二进制（实测修正，见 §11；或发布自有
 `openai-codex-cli-bin` 替身包，改 `sdk/python/pyproject.toml:19` 与
 `sdk/python/_runtime_setup.py:27` 的 REPO_SLUG）。
 

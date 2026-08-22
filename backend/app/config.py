@@ -119,6 +119,9 @@ class Settings(BaseSettings):
     codex_api_key: str | None = None
     # Phase 1 主 Agent 只读状态：read_only（spec §7 只允许读工具）。
     codex_sandbox: Literal["read_only", "workspace_write", "full_access"] = "read_only"
+    # 指向自建 codex-app-server 二进制（深墨 Fork 构建产物）。
+    # 空 = 使用 SDK 自带的 pinned runtime。见 CODEX_FORK_PIN。
+    codex_bin: str | None = None
 
 
 @lru_cache

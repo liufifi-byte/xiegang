@@ -792,7 +792,10 @@ claim_id → evidence_id → source_url / user_fact / calculation
   Interrupt/Resume、事件流、错误恢复）由 Fork 提供，保持与上游一致；
 - 深墨能力落点：`codex-rs/ext/decision-expert/`（ToolContributor/ContextContributor/
   TurnLifecycleContributor）+ skills/hooks/agent role + 产品仓库 Adapter；
-- Python SDK 经 `CodexConfig.codex_bin + config_overrides` 指向自建二进制；
+- Python SDK 经 `CodexConfig(launch_args_override=(BIN, "--listen", "stdio://"))`
+  指向自建 codex-app-server 二进制（Phase 2 实测修正：独立 app-server 二进制
+  不能用 `codex_bin=`——SDK 默认 argv 会追加 `app-server` 子命令导致启动失败；
+  该路径下 config_overrides 不生效，配置走 CODEX_HOME）；
 - 源码勘察证据与复用/扩展/改 Core 三分类见 `docs/codex-harness-inventory.md`；
 - Fork 边界、同步、回滚、版本固定见 `docs/adr/ADR-codex-downstream-harness.md`。
 

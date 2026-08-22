@@ -19,7 +19,7 @@ from app.config import get_settings
 from app.decision_harness.runtime import AgentRuntimeError, RuntimeEvent
 
 try:  # openai-codex 可选依赖：pip install -e ".[codex]"
-    from openai_codex import AsyncCodex, Sandbox, TextInput
+    from openai_codex import AsyncCodex, CodexConfig, Sandbox, TextInput
     from openai_codex.generated.v2_all import (
         AgentMessageThreadItem,
         ItemCompletedNotification,
@@ -31,6 +31,7 @@ try:  # openai-codex 可选依赖：pip install -e ".[codex]"
     _CODEX_SDK_AVAILABLE = True
 except ImportError:  # pragma: no cover - 依赖缺失分支
     AsyncCodex = None  # type: ignore[assignment]
+    CodexConfig = None  # type: ignore[assignment]
     Sandbox = None  # type: ignore[assignment]
     TextInput = None  # type: ignore[assignment]
     AgentMessageThreadItem = None  # type: ignore[assignment]
@@ -88,7 +89,13 @@ class CodexAgentRuntime:
     未注入且 SDK 缺失时，构造即抛 codex_sdk_unavailable。
     """
 
-    def __init__(self, *, codex_client: Any | None = None, model: str | None = None):
+    def __init__(
+        self,
+        *,
+        codex_client: Any | None = None,
+        model: str | None = None,
+        codex_bin: str | None = None,
+    ):
         self._injected_client = codex_client
         self._client: Any | None = None
         self._client_lock = asyncio.Lock()
@@ -97,6 +104,8 @@ class CodexAgentRuntime:
         self._event_seq = 0
         settings = get_settings()
         self._model = model if model is not None else settings.codex_model or None
+        # 指向深墨 Fork 自建二进制（CODEX_FORK_PIN 记录的构建产物）
+        self._codex_bin = codex_bin or settings.codex_bin
         self._sandbox_name = settings.codex_sandbox
         if self._sandbox_name not in _VALID_SANDBOXES:
             raise AgentRuntimeError(
@@ -118,7 +127,17 @@ class CodexAgentRuntime:
         async with self._client_lock:
             if self._client is not None:
                 return self._client
-            client = AsyncCodex()
+            if self._codex_bin:
+                # 深墨 Fork 路径：CODEX_BIN 指向独立 codex-app-server 二进制，
+                # 而非带 app-server 子命令的 codex CLI——SDK 默认 argv 会拼上
+                # "app-server" 子命令导致启动失败，必须用 launch_args_override
+                # 整替 argv（SDK client.start()：override 非空则完全替换）。
+                config = CodexConfig(
+                    launch_args_override=(self._codex_bin, "--listen", "stdio://")
+                )
+                client = AsyncCodex(config)
+            else:
+                client = AsyncCodex()
             api_key = get_settings().codex_api_key
             if api_key:
                 await client.login_api_key(api_key)
