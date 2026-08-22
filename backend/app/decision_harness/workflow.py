@@ -206,6 +206,7 @@ class DecisionWorkflow:
         parliament_id: str | None = None,
         runtime_mode: str = "codex_harness",
         resume: bool = False,
+        pre_created: bool = False,
     ):
         self.run_id = run_id
         self.decision = decision
@@ -215,6 +216,8 @@ class DecisionWorkflow:
         self.parliament_id = parliament_id
         self.runtime_mode = runtime_mode
         self.resume = resume
+        # 行已由调用方预建（shadow runner 等）：容忍 create_run 幂等返回 False
+        self.pre_created = pre_created
         self.outcome: WorkflowOutcome | None = None
 
     def _finish(self, outcome: WorkflowOutcome) -> WorkflowOutcome:
@@ -233,7 +236,7 @@ class DecisionWorkflow:
             decision_state=self.decision.model_dump(mode="json"),
             budget=self.budget.model_dump(mode="json"),
         )
-        if not created and not self.resume:
+        if not created and not self.resume and not self.pre_created:
             raise ValueError(
                 f"decision_run {run_id} 已存在（如需恢复请传 resume=True）"
             )

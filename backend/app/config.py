@@ -112,6 +112,10 @@ class Settings(BaseSettings):
     # ============================================================
     decision_runtime_mode: str = "legacy"
 
+    # 灰度：legacy 模式下按 parliament_id 确定性哈希选前 N% 走 codex_harness
+    # （spec §19.4/§20 Phase 8）。0 = 完全 legacy（默认）。回滚 = 改回 0。
+    decision_runtime_canary_percent: int = 0
+
     # Codex Runtime Adapter（Phase 1）。SDK 是可选依赖：
     # pip install -e ".[codex]"（openai-codex 含钉死版本的本地 runtime 二进制）。
     # codex_model 为空串 = 使用 Codex runtime 默认模型。

@@ -523,6 +523,13 @@ async def run_one_parliament(task: dict) -> None:
         "topic": task["topic"],
         "category": task.get("topic_category"),
     })
+    # V4 shadow（spec §19.4）：shadow 模式才后台对照运行；
+    # legacy（默认）时零开销；影子失败绝不影响主流程
+    try:
+        from app.decision_harness.shadow_runner import launch_shadow_if_enabled
+        launch_shadow_if_enabled(parliament_id, task)
+    except Exception:
+        pass
     await _set_phase(parliament_id, "claimed")
 
     try:
