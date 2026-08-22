@@ -16,15 +16,23 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
+from app.decision_harness.context_compiler import (
+    build_expert_task_packet,
+    compile_child_context,
+    root_observation,
+)
 from app.decision_harness.event_bridge import make_product_event, translate_runtime_event
+from app.decision_harness.expert_loop import ExpertAgentRunner
 from app.decision_harness.repository import DecisionRunRepository
-from app.decision_harness.runtime import AgentRuntime
+from app.decision_harness.runtime import AgentRuntime, AgentRuntimeError
 from app.decision_harness.schemas import (
     BudgetPolicy,
     DecisionModel,
+    EXPERT_IDS,
     MainAgentAction,
     MainAgentActionRequest,
     PlanSpec,
+    SubAgentResult,
     WorkflowPhase,
 )
 
@@ -74,6 +82,27 @@ class WorkflowOutcome:
     plan: PlanSpec | None = None
     error: str | None = None
     deferred: list[str] = field(default_factory=list)
+
+
+# Phase 2 垂直切片：只放经济学家（spec §20 Phase 2；扩展到八人是 Phase 3）
+DEFAULT_EXPERT_TASKS = {
+    "economist": "评估各选项在未来 12 个月的现金流压力、隐性成本与机会成本",
+}
+
+
+def _parse_expert_tasks(plan: PlanSpec) -> list[tuple[str, str]]:
+    """plan.expert_tasks 形如 "economist: 现金流压力测试" → [(expert_id, objective)]。"""
+    tasks: list[tuple[str, str]] = []
+    for entry in plan.expert_tasks:
+        expert_id, _, objective = entry.partition(":")
+        expert_id = expert_id.strip()
+        objective = objective.strip()
+        if expert_id not in EXPERT_IDS:
+            continue
+        if len(objective) < 10:
+            objective = DEFAULT_EXPERT_TASKS.get(expert_id, objective) or objective
+        tasks.append((expert_id, objective))
+    return tasks
 
 
 def _chair_prompt(
@@ -374,3 +403,112 @@ class DecisionWorkflow:
                 run_id=run_id, status="failed", actions_taken=actions_taken,
                 error="budget_exhausted_without_plan", deferred=deferred,
             ))
+
+    # ============================================================
+    # Phase 2：专家阶段（DELEGATION → EXPERT_LOOPS → Root 结构化观察）
+    # ============================================================
+
+    async def run_experts(
+        self,
+        *,
+        allowed_experts: tuple[str, ...] = ("economist",),
+    ) -> AsyncIterator[dict[str, Any]]:
+        """按计划跑专家子 Agent（Phase 2 只放经济学家）。
+
+        前置：run_to_plan 已产出计划（本实例 outcome 或 DB active_plan）。
+        失败隔离：单个子 Agent 失败/超时只产生 failed 结果行，不影响
+        其他任务与 Root Run（ExpertAgentRunner 保证不抛异常）。
+        终态：run status="experts_done"（辩论/审计/终局属 Phase 5/6）。
+        """
+        run_id = self.run_id
+        repo, runtime = self.repo, self.runtime
+
+        plan = self.outcome.plan if (self.outcome and self.outcome.plan) else None
+        if plan is None:
+            row = await repo.get_run(run_id)
+            if row and row.get("active_plan"):
+                plan = PlanSpec.model_validate(row["active_plan"])
+        if plan is None:
+            raise ValueError("run_experts 需要先完成计划（先跑 run_to_plan）")
+
+        await repo.update_run(run_id, workflow_phase=WorkflowPhase.DELEGATION.value)
+        yield make_product_event(run_id, "run_log", {"phase": WorkflowPhase.DELEGATION.value})
+
+        tasks = [
+            (eid, obj) for eid, obj in _parse_expert_tasks(plan)
+            if eid in allowed_experts
+        ]
+        if not tasks:
+            fallback_id = allowed_experts[0]
+            tasks = [(fallback_id, DEFAULT_EXPERT_TASKS[fallback_id])]
+        # 计划之后的第一次上下文编译：版本 = 计划版本 + 1
+        context_version = plan.plan_version + 1
+
+        packets = []
+        for i, (expert_id, objective) in enumerate(tasks, start=1):
+            packet = build_expert_task_packet(
+                task_id=f"task-{expert_id}-{i}",
+                expert_id=expert_id,
+                objective=objective,
+                decision=self.decision,
+                plan=plan,
+                context_version=context_version,
+            )
+            packets.append(packet)
+            yield make_product_event(
+                run_id, "agent_task_created",
+                {"agent_id": expert_id, "task_id": packet.task_id,
+                 "objective": objective},
+            )
+
+        await repo.update_run(run_id, workflow_phase=WorkflowPhase.EXPERT_LOOPS.value)
+        yield make_product_event(
+            run_id, "run_log", {"phase": WorkflowPhase.EXPERT_LOOPS.value}
+        )
+
+        results: list[SubAgentResult] = []
+        for packet in packets:
+            context = compile_child_context(
+                packet, decision=self.decision, plan=plan
+            )
+            runner = ExpertAgentRunner(
+                run_id=run_id, packet=packet, context=context,
+                runtime=runtime, repo=repo,
+            )
+            async for event in runner.run():
+                yield event
+            if runner.outcome is not None:
+                results.append(runner.outcome.result)
+
+        # Root 观察：只喂结构化摘要，绝不吸收 Child 原始历史（spec §13.3）
+        observation = root_observation(results)
+        root_session = f"{run_id}:main"
+        try:
+            async for event in runtime.start_turn(
+                root_session,
+                "专家阶段结束。以下为结构化结果摘要（非原始记录）：\n"
+                + json.dumps(observation, ensure_ascii=False, indent=2)
+                + "\n请简短确认已收到（一句话即可，Phase 5 将进入争议提取）。",
+            ):
+                translated = translate_runtime_event(run_id, event)
+                if translated is not None:
+                    yield translated
+        except AgentRuntimeError:
+            yield make_product_event(
+                run_id, "run_log",
+                {"note": "root_session_absent", "hint": "resume 后再跑专家阶段"},
+            )
+
+        # 结构化结果写回 decision_state（verified_user_facts 不动）
+        row = await repo.get_run(run_id)
+        state = dict(row.get("decision_state") or {}) if row else {}
+        state["expert_results"] = observation["results"]
+        state["expert_results_summary"] = observation["summary"]
+        state["expert_results_context_version"] = context_version
+        await repo.update_run(run_id, decision_state=state, status="experts_done")
+
+        self.expert_results = results
+        yield make_product_event(
+            run_id, "run_log",
+            {"note": "experts_complete", **observation["summary"]},
+        )

@@ -93,6 +93,8 @@ class FakeAgentRuntime:
         self._delay = turn_delay_seconds
         # 观测钩子（测试断言用）
         self.calls: list[tuple[str, str]] = []
+        # 每会话收到的 prompt 列表（测试隔离断言用：Root 不得收到 Child 上下文）
+        self.prompts: dict[str, list[str]] = {}
 
     # ---- 生命周期 ----
 
@@ -142,6 +144,7 @@ class FakeAgentRuntime:
         self, session_id: str, prompt: str, *, tools: list[str] | None = None
     ) -> AsyncIterator[RuntimeEvent]:
         self.calls.append(("start_turn", session_id))
+        self.prompts.setdefault(session_id, []).append(prompt)
         if session_id not in self._sessions:
             raise AgentRuntimeError(
                 "session_not_found", f"会话 {session_id} 未启动", retryable=True
