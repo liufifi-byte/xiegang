@@ -118,9 +118,13 @@ def test_migration_002_idempotent_sql():
     stripped = "\n".join(
         line.split("--")[0] for line in text.splitlines()
     )
-    upper = stripped.upper()
-    assert " DROP " not in upper
-    assert "ALTER TABLE" not in upper
+    # 剥离 DO $$ ... $$ 守卫块（内含存在性检查的幂等 DROP CONSTRAINT，可重放）
+    import re as _re
+
+    no_dollar = _re.sub(r"DO \$\$.*?\$\$;", "", stripped, flags=_re.S)
+    upper = no_dollar.upper()
+    assert " DROP " not in upper, "守卫块之外出现 DROP（不可重放）"
+    assert "ALTER TABLE" not in upper, "守卫块之外出现 ALTER（不可重放）"
     import re
 
     creates = re.findall(r"CREATE\s+(TABLE|INDEX)\s+(?!IF\s+NOT\s+EXISTS)", stripped, re.I)

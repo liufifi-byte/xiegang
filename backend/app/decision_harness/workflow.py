@@ -970,11 +970,24 @@ class DecisionWorkflow:
                     "note": "targeted_repair",
                     "rejected": auditor.outcome.rejected_ids,
                 })
-            unverified_unknowns = [
-                c.text for c in kernel.claims
-                if "unverified" == getattr(kernel.verdict(c.claim_id).status, "value",
-                                           str(kernel.verdict(c.claim_id).status))
-            ]
+            # 搜索过但查不到证据的事实缺口 → 转问用户（第二次机会），
+            # 不再卡 Gate；只有证据互相矛盾（DISPUTED）的才算未处理缺口
+            unverified_unknowns = []
+            ask_user_later = []
+            for c in kernel.claims:
+                verdict = kernel.verdict(c.claim_id)
+                status_value = getattr(verdict.status, "value", str(verdict.status))
+                if status_value == "disputed":
+                    unverified_unknowns.append(c.text)
+                elif status_value == "unverified":
+                    ask_user_later.append(c.text)
+            if ask_user_later:
+                state_q = dict(row.get("decision_state") or {}) if row else {}
+                merged_q = list(dict.fromkeys(
+                    (state_q.get("questions_for_user") or []) + ask_user_later[:6]
+                ))[:8]
+                state_q["questions_for_user"] = merged_q
+                await self.repo.update_run(run_id, decision_state=state_q)
 
         # ---- Synthesis ----
         await self.repo.update_run(run_id, workflow_phase=WorkflowPhase.SYNTHESIS_LOOP.value)

@@ -99,7 +99,7 @@ CREATE INDEX IF NOT EXISTS idx_evidence_records_run ON evidence_records(decision
 CREATE TABLE IF NOT EXISTS debate_issues (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   decision_run_id UUID NOT NULL REFERENCES decision_runs(id),
-  dispute_key TEXT UNIQUE,
+  dispute_key TEXT,
   question TEXT,
   importance FLOAT,
   conflict_type TEXT,
@@ -119,3 +119,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_runs_run_and_id
   ON agent_runs(decision_run_id, id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_evidence_records_run_and_id
   ON evidence_records(decision_run_id, id);
+
+-- 彩排实测修正：dispute_key 只在场内唯一（每场都有自己的 dispute-1）。
+-- 存量库若已带单列 UNIQUE（首版建表），幂等摘除后改建复合唯一。
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'debate_issues'::regclass
+      AND conname = 'debate_issues_dispute_key_key'
+  ) THEN
+    ALTER TABLE debate_issues DROP CONSTRAINT debate_issues_dispute_key_key;
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_debate_issues_run_and_key
+  ON debate_issues(decision_run_id, dispute_key);

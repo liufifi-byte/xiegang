@@ -96,19 +96,23 @@ class EvidenceAuditor:
                     "reason": reason,
                 })
 
-        # 定向修订：核心 claim 在剔除后必须仍有强支撑
+        # 定向修订：审计只纠「有证据但被击落」或「证据互相矛盾」的 claim——
+        # 纯粹没搜到证据的 claim 是 unknown（已进 remaining_uncertainties/
+        # questions_for_user），不是审计失败（彩排复盘：0 证据≠结论不可用）
         for claim_id in self.core_claim_ids:
+            records = kernel.evidence_for_claim(claim_id)
             verdict = kernel.verdict(claim_id)
-            if verdict.status not in (EvidenceStatus.VERIFIED, EvidenceStatus.CORROBORATED):
-                strong_left = [
-                    r for r in kernel.evidence_for_claim(claim_id)
-                    if r.status in (EvidenceStatus.VERIFIED, EvidenceStatus.CORROBORATED)
-                    and r.authority_level not in _CORE_LOW_AUTHORITY
-                ]
-                if not strong_left:
-                    outcome.unsupported_core_claims.append(claim_id)
-                    outcome.passed = False
-                    outcome.issues.append(f"core_claim_unsupported:{claim_id}")
+            had_evidence = bool(records)
+            conflicting = verdict.status == EvidenceStatus.DISPUTED
+            all_struck = had_evidence and all(
+                r.status == EvidenceStatus.REJECTED for r in records
+            )
+            if conflicting or all_struck:
+                outcome.unsupported_core_claims.append(claim_id)
+                outcome.passed = False
+                outcome.issues.append(
+                    f"core_claim_{'disputed' if conflicting else 'all_evidence_rejected'}:{claim_id}"
+                )
 
         yield make_product_event(
             run_id,
