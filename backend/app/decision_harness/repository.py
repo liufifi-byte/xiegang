@@ -49,6 +49,19 @@ def _uuid() -> str:
     return str(uuid.uuid4())
 
 
+def _db_id(key: str) -> str:
+    """逻辑 ID → 数据库 UUID（spec §14 主键为 UUID）。
+
+    本来就是合法 UUID 的原样规范化（保持大小写/连字符一致）；
+    复合逻辑 ID（如 "run:agent:task"）用 uuid5 确定性映射——
+    同一逻辑 ID 永远同一个 UUID，upsert 幂等。内存模式不经此转换。
+    """
+    try:
+        return str(uuid.UUID(str(key)))
+    except (ValueError, AttributeError):
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"shenmo:{key}"))
+
+
 # ============ 模块级内存存储（测试 / SKIP_DB 模式）============
 
 _MEMORY: dict[str, dict[Any, Any]] = {
@@ -117,7 +130,7 @@ class DecisionRunRepository:
         return await asyncio.to_thread(
             self._exec,
             sql,
-            [run_id, parliament_id, runtime_mode,
+            [_db_id(run_id), parliament_id, runtime_mode,
              json.dumps(decision_state), json.dumps(budget)],
             want_rowcount=True,
         )
@@ -141,7 +154,7 @@ class DecisionRunRepository:
             WHERE id = %s
         """
         await asyncio.to_thread(
-            self._exec, sql, [*fields.values(), run_id]
+            self._exec, sql, [*fields.values(), _db_id(run_id)]
         )
 
     async def get_run(self, run_id: str) -> dict[str, Any] | None:
@@ -149,7 +162,7 @@ class DecisionRunRepository:
             row = _MEMORY["runs"].get(run_id)
             return dict(row) if row else None
         sql = "SELECT * FROM decision_runs WHERE id = %s"
-        return await asyncio.to_thread(self._fetch_one, sql, [run_id])
+        return await asyncio.to_thread(self._fetch_one, sql, [_db_id(run_id)])
 
     async def get_run_by_parliament(self, parliament_id: str) -> dict[str, Any] | None:
         if self._memory:
@@ -200,8 +213,8 @@ class DecisionRunRepository:
         await asyncio.to_thread(
             self._exec,
             sql,
-            [row_id, run_id, version, json.dumps(plan), reason,
-             created_by_agent_run_id],
+            [row_id, _db_id(run_id), version, json.dumps(plan), reason,
+             _db_id(created_by_agent_run_id) if created_by_agent_run_id else None],
         )
         return row_id
 
@@ -220,7 +233,7 @@ class DecisionRunRepository:
                    created_by_agent_run_id, created_at
             FROM plan_versions WHERE decision_run_id = %s ORDER BY version ASC
         """
-        return await asyncio.to_thread(self._fetch_all, sql, [run_id])
+        return await asyncio.to_thread(self._fetch_all, sql, [_db_id(run_id)])
 
     # ============ agent_runs ============
 
@@ -295,7 +308,7 @@ class DecisionRunRepository:
         await asyncio.to_thread(
             self._exec,
             sql,
-            [agent_run_id, decision_run_id, agent_type, expert_id,
+            [_db_id(agent_run_id), _db_id(decision_run_id), agent_type, expert_id,
              runtime_provider, runtime_thread_id, task_id, status,
              json.dumps(task_packet) if task_packet is not None else None,
              json.dumps(result) if result is not None else None,
@@ -310,7 +323,7 @@ class DecisionRunRepository:
                 if v["decision_run_id"] == run_id
             ]
         sql = "SELECT * FROM agent_runs WHERE decision_run_id = %s ORDER BY created_at"
-        return await asyncio.to_thread(self._fetch_all, sql, [run_id])
+        return await asyncio.to_thread(self._fetch_all, sql, [_db_id(run_id)])
 
     # ============ evidence_records（Phase 4）============
 
@@ -366,7 +379,7 @@ class DecisionRunRepository:
         await asyncio.to_thread(
             self._exec,
             sql,
-            [evidence_id, run_id, claim_id, kind, status, source_title,
+            [evidence_id, _db_id(run_id), claim_id, kind, status, source_title,
              source_url, source_domain, excerpt, relevance, reliability,
              authority_level, json.dumps(raw or {})],
         )
@@ -381,7 +394,7 @@ class DecisionRunRepository:
                    authority_level
             FROM evidence_records WHERE decision_run_id = %s
         """
-        return await asyncio.to_thread(self._fetch_all, sql, [run_id])
+        return await asyncio.to_thread(self._fetch_all, sql, [_db_id(run_id)])
 
     # ============ debate_issues（Phase 5）============
 
@@ -432,7 +445,7 @@ class DecisionRunRepository:
         await asyncio.to_thread(
             self._exec,
             sql,
-            [run_id, dispute_key, question, importance, conflict_type,
+            [_db_id(run_id), dispute_key, question, importance, conflict_type,
              json.dumps(participants), json.dumps(claims or []),
              status, round_count, json.dumps(resolution or {})],
         )
@@ -446,7 +459,7 @@ class DecisionRunRepository:
                    participants, claims, status, round_count, resolution
             FROM debate_issues WHERE decision_run_id = %s
         """
-        return await asyncio.to_thread(self._fetch_all, sql, [run_id])
+        return await asyncio.to_thread(self._fetch_all, sql, [_db_id(run_id)])
 
     # ============ 底层执行（仅 DB 模式）============
 

@@ -57,7 +57,8 @@ def aggregate(comparisons: list[dict[str, Any]]) -> dict[str, Any]:
     n = len(comparisons)
     if not n:
         return {"runs": 0}
-    both = sum(1 for c in comparisons if c["both_completed"])
+    valid = [c for c in comparisons if "both_completed" in c]
+    both = sum(1 for c in valid if c["both_completed"])
     strengths: list[str] = [
         c["shadow"]["recommendation_strength"]
         for c in comparisons if c["shadow"]["recommendation_strength"]
@@ -67,11 +68,11 @@ def aggregate(comparisons: list[dict[str, Any]]) -> dict[str, Any]:
         "both_completed": both,
         "both_completed_rate": round(both / n, 3),
         "shadow_report_rate": round(
-            sum(1 for c in comparisons if c["shadow"]["has_final_report"]) / n, 3),
+            sum(1 for c in valid if c["shadow"]["has_final_report"]) / n, 3),
         "legacy_completed_rate": round(
-            sum(1 for c in comparisons if c["legacy"]["completed"]) / n, 3),
+            sum(1 for c in valid if c["legacy"]["completed"]) / n, 3),
         "shadow_avg_uncertainties": round(
-            sum(c["shadow"]["remaining_uncertainties"] for c in comparisons) / n, 2),
+            sum(c["shadow"]["remaining_uncertainties"] for c in valid) / n, 2),
         "strength_distribution": {
             s: strengths.count(s) for s in set(strengths)
         },

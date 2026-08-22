@@ -68,7 +68,7 @@ async def run_shadow(
     from app.decision_harness.schemas import BudgetPolicy
     from app.decision_harness.workflow import DecisionWorkflow
 
-    shadow_run_id = run_id or f"shadow-{uuid.uuid4().hex[:12]}"
+    shadow_run_id = run_id or str(uuid.uuid4())  # DB 主键为 UUID
     repo = DecisionRunRepository()
     decision = _decision_from_task(task)
 
