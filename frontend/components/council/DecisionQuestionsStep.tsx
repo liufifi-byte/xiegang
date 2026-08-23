@@ -12,7 +12,8 @@ interface Props {
   answers: Record<string, string | string[]>;
   error: string | null;
   onChange: (id: string, value: string | string[]) => void;
-  onBack: () => void;
+  /** 可选：有上一题时才渲染"上一题"（第一题隐藏） */
+  onBack?: () => void;
   onNext: () => void;
   onUnknown: () => void;
   onCreate: () => void;
@@ -47,14 +48,10 @@ export function DecisionQuestionsStep({ questions, index, answers, error, onChan
 
   return (
     <>
-      {/* 两步进度（与第一步同款，第二步实心） */}
-      <div className="mb-4 flex items-center gap-2 text-[11px] font-bold text-[#172d4d]">
-        <span className="grid h-6 w-6 place-items-center rounded-full bg-[#172d4d] text-white">✓</span>
-        <span className="text-[#6f8095]">确认任务</span>
-        <span className="h-px flex-1 bg-[#172d4d]" />
-        <span className="grid h-6 w-6 place-items-center rounded-full bg-[#172d4d] text-white">2</span>
-        <span>补充信息</span>
-        <span className="ml-auto text-[10px] font-medium text-[#718096]">
+      {/* 问题计数（单步流程，确认卡已移除） */}
+      <div className="mb-4 flex items-center justify-between text-[11px] font-bold text-[#172d4d]">
+        <span>补充关键信息</span>
+        <span className="text-[10px] font-medium text-[#718096]">
           问题 {index + 1} / {questions.length}
         </span>
       </div>
@@ -83,7 +80,9 @@ export function DecisionQuestionsStep({ questions, index, answers, error, onChan
       {/* 底部操作区（与第一步同款：窄屏上下排列，主按钮满行） */}
       <div className="mt-5 flex flex-col-reverse gap-3 border-t border-[#e6eaf0] pt-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
-          <button type="button" onClick={onBack} className="rounded-lg px-2 py-2 text-sm text-[#657892] hover:bg-[#f3f6f9]">上一步</button>
+          {onBack && (
+            <button type="button" onClick={onBack} className="rounded-lg px-2 py-2 text-sm text-[#657892] hover:bg-[#f3f6f9]">上一题</button>
+          )}
           <button type="button" onClick={onClose} disabled={creating} className="text-xs text-[#8a98a9] hover:text-[#50627a]">退出</button>
         </div>
         <div className="flex items-center gap-2">

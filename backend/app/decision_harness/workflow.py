@@ -852,7 +852,7 @@ class DecisionWorkflow:
                 if q not in seen_q:
                     seen_q.add(q)
                     consolidated_questions.append(str(q)[:120])
-        consolidated_questions = consolidated_questions[:8]
+        consolidated_questions = consolidated_questions[:3]  # 追问要少（用户反馈）
         if consolidated_questions:
             state_q = dict((row_q.get("decision_state") or {})) if row_q else {}
             state_q["questions_for_user"] = consolidated_questions

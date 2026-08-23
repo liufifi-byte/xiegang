@@ -36,6 +36,26 @@ describe("DecisionQuestionsStep", () => {
     renderStep({ index: 1, answers: { budget: "12000" } });
     expect(screen.getByRole("button", { name: "确认并召开会议" })).toBeEnabled();
   });
+  it("第一题不显示上一题，后续题显示", () => {
+    // 父组件在 index=0 时不传 onBack
+    const props: React.ComponentProps<typeof DecisionQuestionsStep> = {
+      questions, index: 0, answers: {}, error: null, onChange: vi.fn(),
+      onNext: vi.fn(), onUnknown: vi.fn(), onCreate: vi.fn(),
+      onClose: vi.fn(), creating: false,
+    };
+    const first = render(<DecisionQuestionsStep {...props} />);
+    expect(first.container.textContent).not.toContain("上一题");
+    first.unmount();
+    const second = renderStep({ index: 1 });
+    expect(screen.getByRole("button", { name: "上一题" })).toBeInTheDocument();
+  });
+
+  it("单步流程：不出现确认任务步骤条", () => {
+    renderStep();
+    expect(screen.queryByText("确认任务")).toBeNull();
+    expect(screen.getByText("问题 1 / 2")).toBeInTheDocument();
+  });
+
 
   it("问题与为什么重要合并在浅底卡片内，选项为胶囊", () => {
     renderStep();

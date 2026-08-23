@@ -7,8 +7,7 @@ import {
   previewDecisionPath,
   DecisionPathPreviewRequest,
 } from "@/lib/api";
-import type { DecisionPathPreview, DecisionPathStatus } from "@/lib/types";
-import { TaskConfirmationStep } from "./TaskConfirmationStep";
+import type { DecisionPathPreview } from "@/lib/types";
 import { DecisionQuestionsStep } from "./DecisionQuestionsStep";
 
 interface Props {
@@ -21,17 +20,14 @@ interface Props {
   onParliamentCreated: (parliamentId: string) => void;
 }
 
-const MAX_BRIEF_FEEDBACK = 500;
-
-type ModalStep = "confirm_task" | "answer_questions";
-
+/**
+ * 会前信息收集（2026-08-23 改版）：确认卡已移除——只在系统真的缺
+ * 关键信息时才追问（后端最多 2 问），没有问题就直接开始会议。
+ */
 export function DecisionPathModal({ open, topic, topicCategory, userBackground, selectedExpertIds, onClose, onParliamentCreated }: Props) {
-  const [status, setStatus] = useState<DecisionPathStatus>("idle");
-  const [step, setStep] = useState<ModalStep>("confirm_task");
+  const [status, setStatus] = useState<"idle" | "generating" | "ready" | "creating_meeting" | "create_failed">("idle");
   const [preview, setPreview] = useState<DecisionPathPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [editingBrief, setEditingBrief] = useState(false);
-  const [briefFeedback, setBriefFeedback] = useState("");
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [questionIndex, setQuestionIndex] = useState(0);
   const [generationId, setGenerationId] = useState<string | null>(null);
@@ -43,10 +39,7 @@ export function DecisionPathModal({ open, topic, topicCategory, userBackground, 
 
   async function generateInitial() {
     setStatus("generating");
-    setStep("confirm_task");
     setError(null);
-    setEditingBrief(false);
-    setBriefFeedback("");
     setAnswers({});
     setQuestionIndex(0);
     setGenerationId(null);
@@ -55,6 +48,11 @@ export function DecisionPathModal({ open, topic, topicCategory, userBackground, 
       const response = await previewDecisionPath(request);
       setPreview(response);
       setGenerationId(response.generation_id);
+      // 没有需要追问的问题 → 直接开始会议，不弹任何确认界面
+      if ((response.questions?.length ?? 0) === 0) {
+        await createWithAnswers(response.generation_id, {});
+        return;
+      }
       setStatus("ready");
     } catch (cause) {
       setPreview(null);
@@ -63,27 +61,8 @@ export function DecisionPathModal({ open, topic, topicCategory, userBackground, 
     }
   }
 
-  async function regenerateWithFeedback() {
-    if (!briefFeedback.trim() || !generationId) return;
-    setStatus("revising");
-    setError(null);
-    try {
-      const response = await previewDecisionPath({ topic, topic_category: topicCategory, user_background: userBackground, selected_expert_ids: selectedExpertIds ?? undefined, generation_id: generationId, brief_feedback: briefFeedback, existing_answers: toAnswerArray() });
-      setPreview(response);
-      setGenerationId(response.generation_id);
-      const validIds = new Set(response.questions.map((question) => question.id));
-      setAnswers((current) => Object.fromEntries(Object.entries(current).filter(([id]) => validIds.has(id))));
-      setQuestionIndex(0);
-      setEditingBrief(false);
-      setStatus("ready");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      setStatus("ready");
-    }
-  }
-
-  function toAnswerArray() {
-    return Object.entries(answers).map(([question_id, value]) => ({ question_id, value }));
+  function toAnswerArray(allAnswers: Record<string, string | string[]>) {
+    return Object.entries(allAnswers).map(([question_id, value]) => ({ question_id, value }));
   }
 
   function setAnswer(questionId: string, value: string | string[]) {
@@ -95,31 +74,18 @@ export function DecisionPathModal({ open, topic, topicCategory, userBackground, 
     return value !== undefined && value !== "" && (!Array.isArray(value) || value.length > 0);
   }) ?? false, [answers, preview]);
 
-  async function handleConfirmCreate() {
-    if (!preview || !generationId || !allAnswered || status === "creating_meeting") return;
+  async function createWithAnswers(genId: string, allAnswers: Record<string, string | string[]>) {
+    if (status === "creating_meeting") return;
     setStatus("creating_meeting");
     setError(null);
     try {
       const idempotency = `cl_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-      const response = await createParliamentV2({ topic, topic_category: topicCategory, user_background: userBackground, selected_expert_ids: selectedExpertIds ?? undefined, idempotency_key: idempotency, decision_path_generation_id: generationId, brief_confirmation: "confirmed", decision_path_answers: toAnswerArray() });
+      const response = await createParliamentV2({ topic, topic_category: topicCategory, user_background: userBackground, selected_expert_ids: selectedExpertIds ?? undefined, idempotency_key: idempotency, decision_path_generation_id: genId, brief_confirmation: "confirmed", decision_path_answers: toAnswerArray(allAnswers) });
       onParliamentCreated(response.parliament_id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setStatus("create_failed");
     }
-  }
-
-  // 存在尚未应用的非空修改内容：必须先重新梳理（或清空）才能继续
-  const hasPendingBriefFeedback = editingBrief && briefFeedback.trim().length > 0;
-
-  function continueToQuestions() {
-    if (!preview || hasPendingBriefFeedback) return;
-    if (preview.questions.length === 0) {
-      void handleConfirmCreate();
-      return;
-    }
-    setStep("answer_questions");
-    setQuestionIndex(0);
   }
 
   function handleUnknown() {
@@ -133,47 +99,44 @@ export function DecisionPathModal({ open, topic, topicCategory, userBackground, 
     setPreview(null);
     setGenerationId(null);
     setError(null);
-    setEditingBrief(false);
     onClose();
   }
 
   if (!open) return null;
 
-  const busy = status === "generating" || status === "revising" || status === "creating_meeting";
-  // 第一步主按钮的禁用条件（§5.3）：正在重新梳理/正在创建会议时不可继续
-  const actionBusy = status === "revising" || status === "creating_meeting";
+  const generating = status === "generating";
+  const creating = status === "creating_meeting";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#10233b]/45 px-3 py-4 backdrop-blur-sm sm:px-4" role="dialog" aria-modal="true" aria-labelledby="decision-path-title">
       <section className="flex max-h-[calc(100vh-2rem)] w-full max-w-[560px] flex-col overflow-hidden rounded-2xl border border-[#dce4ed] bg-[#fbfcfe] shadow-[0_24px_80px_rgba(16,35,59,0.22)]">
         <header className="shrink-0 border-b border-[#e6eaf0] bg-white px-5 py-4 sm:px-7">
-          <p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-[#607692]">Decision room · 会前确认</p>
-          <h2 id="decision-path-title" className="mt-1 text-lg font-bold text-[#172d4d] sm:text-xl">确认本次决策任务</h2>
-          <p className="mt-1 text-xs text-[#718096]">请快速确认讨论方向，信息不准确时可以直接修改</p>
+          <p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-[#607692]">Decision room · 会前补充</p>
+          <h2 id="decision-path-title" className="mt-1 text-lg font-bold text-[#172d4d] sm:text-xl">补充关键信息</h2>
+          <p className="mt-1 text-xs text-[#718096]">只问会改变结论的问题</p>
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-7">
-          {busy && (status === "generating" || status === "revising" || (status === "creating_meeting" && step === "confirm_task")) && (
-            <div className="py-16 text-center"><div className="mx-auto h-9 w-9 animate-spin rounded-full border-2 border-[#dce4ed] border-t-[#172d4d]" /><p className="mt-4 text-sm text-[#718096]">{status === "creating_meeting" ? "正在创建会议…" : status === "revising" ? "正在重新梳理任务…" : "正在梳理本次决策任务…"}</p></div>
+          {generating && (
+            <div className="py-16 text-center"><div className="mx-auto h-9 w-9 animate-spin rounded-full border-2 border-[#dce4ed] border-t-[#172d4d]" /><p className="mt-4 text-sm text-[#718096]">正在梳理本次决策任务…</p></div>
           )}
-          {preview && step === "confirm_task" && (status === "ready" || status === "create_failed") && (
-            <TaskConfirmationStep
-              preview={preview}
-              editingBrief={editingBrief}
-              briefFeedback={briefFeedback}
+          {creating && (
+            <div className="py-16 text-center"><div className="mx-auto h-9 w-9 animate-spin rounded-full border-2 border-[#dce4ed] border-t-[#172d4d]" /><p className="mt-4 text-sm text-[#718096]">正在创建会议…</p></div>
+          )}
+          {preview && !generating && !creating && (status === "ready" || status === "create_failed") && (preview.questions?.length ?? 0) > 0 && (
+            <DecisionQuestionsStep
+              questions={preview.questions}
+              index={questionIndex}
+              answers={answers}
               error={error}
-              hasPendingBriefFeedback={hasPendingBriefFeedback}
-              busy={actionBusy}
-              onEditingChange={setEditingBrief}
-              onFeedbackChange={setBriefFeedback}
-              onRegenerate={() => void regenerateWithFeedback()}
-              onContinue={continueToQuestions}
-              onBack={handleClose}
-              maxFeedback={MAX_BRIEF_FEEDBACK}
+              onChange={setAnswer}
+              onBack={questionIndex > 0 ? () => setQuestionIndex((current) => Math.max(0, current - 1)) : undefined}
+              onNext={() => setQuestionIndex((current) => Math.min(current + 1, preview.questions.length - 1))}
+              onUnknown={handleUnknown}
+              onCreate={() => void createWithAnswers(generationId ?? preview.generation_id, answers)}
+              onClose={handleClose}
+              creating={creating}
             />
-          )}
-          {preview && step === "answer_questions" && (status === "ready" || status === "create_failed" || status === "creating_meeting") && (
-            <DecisionQuestionsStep questions={preview.questions} index={questionIndex} answers={answers} error={error} onChange={setAnswer} onBack={() => setStep("confirm_task")} onNext={() => setQuestionIndex((current) => Math.min(current + 1, preview.questions.length - 1))} onUnknown={handleUnknown} onCreate={() => void handleConfirmCreate()} onClose={handleClose} creating={status === "creating_meeting"} />
           )}
           {error && !preview && <div className="rounded-lg bg-[#fff0ef] px-3 py-2 text-xs leading-5 text-[#a43f48]">{error}<button type="button" onClick={() => void generateInitial()} className="ml-2 font-bold underline">重试</button></div>}
         </div>
