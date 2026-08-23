@@ -119,12 +119,35 @@ def test_fallback_brief_includes_user_topic():
     assert len(result["decision_options"]) == len(pb.decision_options)
 
 
-def test_fallback_picks_first_three_questions():
-    pb = select_playbook("investment")  # 也 6 个候选
+def test_fallback_is_topic_aware_and_choice_only():
+    """兜底不再盲选前 3：看题目内容跳过已写明的，只出选择题，最多 2 个。
+
+    2026-08-23 用户实录：写了"就想知道能不能买房"仍被兜底问
+    "想达成的目标"（short_text 打字题）——盲选前 3 的根治。
+    """
+    pb = select_playbook("investment")
+    # 超短话题：只出 ≤2 个选择题
     result = _build_fallback(pb, topic="买黄金", background="")
-    assert result["selected_question_ids"] == [
-        q.id for q in pb.candidate_questions[:3]
-    ]
+    ids = result["selected_question_ids"]
+    assert 0 < len(ids) <= 2
+    picked_types = {q.id: q.answer_type for q in pb.candidate_questions}
+    for qid in ids:
+        assert picked_types[qid] in ("single_choice", "multi_choice",
+                                     "range_choice", "choice_with_custom")
+
+    # 用户已写明目标/期限 → 这些题被跳过
+    result2 = _build_fallback(
+        pb, topic="想保本增值，这笔钱 5 年内不用，能不能买黄金", background="")
+    ids2 = result2["selected_question_ids"]
+    assert "investment_goal" not in ids2   # 目标已写
+    assert "holding_period" not in ids2    # 期限已写
+    # 全写全了 → 0 个问题，直接开会
+    result3 = _build_fallback(
+        pb,
+        topic="想保本增值跑赢通胀，这笔钱 5 年内不用，最多接受 10% 浮亏，"
+              "应急金充足，占可支配资金三成",
+        background="")
+    assert result3["selected_question_ids"] == []
 
 
 # ============ Playbook 完整性静态校验 ============

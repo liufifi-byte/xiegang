@@ -66,7 +66,7 @@ EXTRACTION_PROMPT_TEMPLATE = """你是「决策路径」信息提取 Agent。
 3. 列出 3-5 个分析维度
 4. 列出最终给用户的具体交付
 5. 从用户原文里识别可量化、可定位、可枚举的明确事实(城市/金额/期限/百分比/截止时间等)
-6. 从下面候选问题 id 里挑出最相关的、最多 3 个(能不问就不问,0 个最好),只挑「原问题与背景里没给的」
+6. 从下面候选问题 id 里挑出最相关的、最多 2 个(能不问就不问,0 个最好;用户原文已表达的信息绝不重复问),只挑「原问题与背景里没给的」
    - 严格按用户专属信息原则(只有用户知道、很可能翻转结论),不挑公开事实问题
    - 只挑选择题类候选(single_choice/multi_choice/range_choice)——用户全程点选,不打字
 
@@ -77,7 +77,7 @@ EXTRACTION_PROMPT_TEMPLATE = """你是「决策路径」信息提取 Agent。
 
 严格规则:
 - 决策目标必须基于用户的真实意图,不要套模板
-- 不要把候选问题里的全部都选上,只选最关键的 1-3 个
+- 不要把候选问题里的全部都选上,只选最关键的 0-2 个;用户写清了目标/底线/时间就绝不问这些
 - 若用户没提供关键事实,fact 字段填空数组
 """
 
@@ -125,12 +125,65 @@ async def _safe_llm_call(
         return None
 
 
+# 候选 id → 用户原文出现过这些关键词就不再问（兜底也要看题，2026-08-23
+# 用户实录：写了"就想知道能不能买房"仍被问"想达成的目标"）
+_FALLBACK_SKIP_RULES: dict[str, tuple[str, ...]] = {
+    "core_goal": ("想", "希望", "为了", "目标", "就想", "纠结", "能不能",
+                  "该不该", "要不要", "目的"),
+    "dealbreaker": ("底线", "不能接受", "绝不", "最怕", "担心"),
+    "deadline": ("时间", "年内", "月底", "之前", "急", "尽快", "截止"),
+    "decision_deadline": ("时间", "年内", "月底", "之前", "急", "尽快", "截止"),
+    "housing_purpose": ("自住", "投资", "学区", "改善", "刚需", "给父母"),
+    "holding_horizon": ("持有", "居住", "长期", "短期", "自住"),
+    "holding_period": ("持有", "长期", "短期", "闲置", "不用"),
+    "down_payment_range": ("首付", "存款", "积蓄", "现金"),
+    "monthly_payment_ratio": ("月供", "收入比", "工资", "月薪"),
+    "family_opinion": ("配偶", "家人", "父母", "老婆", "老公", "对象",
+                       "家里", "伴侣"),
+    "family_attitude": ("配偶", "家人", "父母", "老婆", "老公", "对象",
+                        "家里", "伴侣"),
+    "primary_motivation": ("因为", "由于", "想解决", "原因", "目的"),
+    "worst_acceptable": ("不能接受", "最怕", "底线", "担心"),
+    "fallback_option": ("退路", "备选", "如果不", "失败"),
+    "income_change": ("涨", "降", "收入", "薪资", "offer", "失业", "跳槽"),
+    "runway_months": ("存款", "积蓄", "应急", "备用金"),
+    "relocation_likelihood": ("换城市", "搬", "回老家", "异地"),
+    "investment_goal": ("目标", "收益", "保本", "增值", "跑赢"),
+    "position_ratio": ("比例", "全部", "一半", "三成", "七成"),
+    "max_drawdown": ("亏损", "浮亏", "回撤", "跌"),
+    "emergency_buffer": ("应急", "备用金", "存款"),
+    "current_assets": ("资产", "存款", "理财", "股票", "基金", "可支配", "积蓄"),
+}
+
+# 兜底只出选择题（用户要求纯点选）
+_CHOICE_TYPES = ("single_choice", "multi_choice", "range_choice",
+                 "choice_with_custom")
+
+
+def _select_fallback_questions(
+    playbook: Playbook, topic: str, background: str, *, limit: int = 2
+) -> list:
+    """主题感知兜底选题：跳过用户已写明的 + 只出选择题 + 最多 2 个。"""
+    text = f"{topic} {background or ''}"
+    picked: list[QuestionTemplate] = []
+    for tpl in playbook.candidate_questions:
+        skip_keywords = _FALLBACK_SKIP_RULES.get(tpl.id, ())
+        if any(k in text for k in skip_keywords):
+            continue
+        if tpl.answer_type not in _CHOICE_TYPES:
+            continue
+        picked.append(tpl)
+        if len(picked) >= limit:
+            break
+    return picked
+
+
 def _build_fallback(
     playbook: Playbook, topic: str, background: str
 ) -> dict:
     """LLM 失败时用 Playbook 兜底输出(PRD §14.2 / §16.1)。"""
-    # 选前 3 个候选问题
-    questions = playbook.candidate_questions[:3]
+    # 主题感知选题（最多 2 个；用户写全了就是 0 个，直接开会）
+    questions = _select_fallback_questions(playbook, topic, background)
     brief = playbook.to_brief_dict()
     # 让 goal 提及用户的话题
     brief["decision_goal"] = brief["decision_goal"] + f"（针对: {topic[:60]}）"
@@ -146,12 +199,13 @@ def _build_fallback(
 
 
 def _build_questions(
-    playbook: Playbook, selected_ids: list[str]
+    playbook: Playbook, selected_ids: list[str],
+    topic: str = "", background: str = "",
 ) -> list[DecisionQuestion]:
     """从选中的 id 拼出完整 Question(PRD §13.3)。"""
     by_id = {q.id: q for q in playbook.candidate_questions}
     result: list[DecisionQuestion] = []
-    for qid in selected_ids[:3]:  # 硬上限 3
+    for qid in selected_ids[:2]:  # 追问要少：硬上限 2
         tpl: QuestionTemplate | None = by_id.get(qid)
         if tpl is None:
             continue
@@ -169,9 +223,9 @@ def _build_questions(
                 unknown_assumption=tpl.unknown_assumption,
             )
         )
-    # 兜底: LLM 选了空 list 或全部无效时, 用 playbook 前 3 个候选
+    # 兜底: LLM 选了空 list 或全部无效时 → 主题感知选题（不再盲选前 3）
     if not result:
-        for tpl in playbook.candidate_questions[:3]:
+        for tpl in _select_fallback_questions(playbook, topic, background):
             result.append(
                 DecisionQuestion(
                     id=tpl.id,
@@ -321,7 +375,7 @@ async def generate_preview(
         llm_out.get("selected_question_ids")
         or [q.id for q in playbook.candidate_questions[:3]]
     )
-    questions = _build_questions(playbook, selected_question_ids)
+    questions = _build_questions(playbook, selected_question_ids, req.topic, background)
 
     extracted_facts = [
         ExtractedFact(
