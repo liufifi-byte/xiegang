@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import "@testing-library/jest-dom/vitest";
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
 import { DecisionQuestionsStep } from "@/components/council/DecisionQuestionsStep";
@@ -34,5 +35,24 @@ describe("DecisionQuestionsStep", () => {
   it("renders the final confirmation action on the last question", () => {
     renderStep({ index: 1, answers: { budget: "12000" } });
     expect(screen.getByRole("button", { name: "确认并召开会议" })).toBeEnabled();
+  });
+
+  it("问题与为什么重要合并在浅底卡片内，选项为胶囊", () => {
+    renderStep();
+    const why = screen.getByText("时间窗口会改变建议权重。");
+    const card = why.closest("div.rounded-xl");
+    expect(card).not.toBeNull();
+    expect(card).toContainElement(screen.getByText("什么时候做决定？"));
+    expect(screen.getByText("三个月内").closest("button")).toHaveClass("rounded-full");
+    expect(screen.getByText("问题 1 / 2")).toBeInTheDocument();
+  });
+
+  it("多选题显示最多 3 项提示", () => {
+    renderStep({ questions: [{
+      id: "m", question: "最看重哪些方面？", why_it_matters: "影响权重。",
+      answer_type: "multi_choice",
+      options: [{ value: "a", label: "收入" }, { value: "b", label: "稳定" }],
+    }], index: 0 });
+    expect(screen.getByText("可选择最多 3 项")).toBeInTheDocument();
   });
 });
