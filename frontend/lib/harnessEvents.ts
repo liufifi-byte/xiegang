@@ -190,15 +190,21 @@ export function describeHarnessEvent(event: RawEvent): HarnessCard | null {
       };
     case "finalization_proposed":
       return { kind: "final", title: "正在汇总结论" };
-    case "decision_finalized":
+    case "decision_finalized": {
+      // 主席统一结论卡（四段：建议/已确认/推进条件/下一步）优先展示
+      const summary = typeof p.chair_summary === "string"
+        ? p.chair_summary.slice(0, 600) : undefined;
+      const strengthHint = p.strength === "clear" ? "结论明确" :
+        p.strength === "conditional" ? "结论带适用条件，请注意查看" :
+        p.strength === "insufficient" ? "信息不足，报告列出了待确认事项" : undefined;
       return {
         kind: "final",
         title: "决策报告已生成",
-        detail: p.strength === "clear" ? "结论明确" :
-          p.strength === "conditional" ? "结论带适用条件，请注意查看" :
-          p.strength === "insufficient" ? "信息不足，报告列出了待确认事项" : undefined,
+        detail: summary || strengthHint,
+        tags: strengthHint ? [strengthHint] : undefined,
         attention: true,
       };
+    }
     case "partial_finalized":
       return {
         kind: "final",

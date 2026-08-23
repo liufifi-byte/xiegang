@@ -297,6 +297,9 @@ class SubAgentResult(BaseModel):
     questions_for_user: list[str] = Field(default_factory=list, max_length=2)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     completion: SubAgentCompletion = Field(default_factory=SubAgentCompletion)
+    # 统一数字账本条目：{label, value, basis: user_input|assumption|calculation|evidence, note}
+    # 关键数字（收入/利率/月供/机会成本/租金…）必须报数——跨 Agent 引用同一本账
+    numbers: list[dict[str, Any]] = Field(default_factory=list, max_length=10)
 
     @field_validator("stance", mode="before")
     @classmethod
@@ -476,6 +479,8 @@ class FinalReport(BaseModel):
     risk_controls: list[str] = Field(default_factory=list, max_length=10)
     reversal_conditions: list[str] = Field(default_factory=list, max_length=10)
     completion: CompletionState
+    # 主席统一结论卡（300-500 字）：建议一句话 + 已确认/未确认 + 推进条件 + 补数清单
+    chair_summary: str = Field(default="", max_length=1200)
 
     @model_validator(mode="after")
     def _insufficient_needs_uncertainty(self) -> "FinalReport":

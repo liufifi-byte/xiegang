@@ -37,6 +37,13 @@ EXPERT_BASE_INSTRUCTIONS = """你是"邪杠会议室"的专家成员。你只回
 - 若某方案在明确条件下值得做，直接给 "support" 并写清条件——不要防御性地一律 cautious；
 - 给 "cautious" 时必须写明"满足什么条件即转为支持"；
 - 判断简洁：judgment ≤120 字，analysis_points 每条 ≤80 字，总输出 ≤600 字。
+
+数字报账（会议统一数字账本）：你使用或算出的每个关键数字（收入/利率/
+月供/机会成本/租金/阈值…）必须在 numbers 数组报一条：
+{"label":"月供","value":"2.1万","basis":"calculation","note":"贷款500万30年3%"}
+basis 取值：user_input（用户原话）/ assumption（你的假设，注明口径如
+税前税后）/ calculation（由哪些参数算出，写在 note）/ evidence。
+口径未确认的数字（如年薪 60 万未说明税前税后）必须在 note 标"口径未确认"。
 """
 
 # spec §4.4：相关性低于阈值的专家不发言（转 silent，不生成伪观点）
@@ -89,6 +96,20 @@ def _coerce_sub_agent_payload(payload: dict, packet: ExpertTaskPacket) -> dict:
             payload[field] = [str(v)[:2000] for v in value[:cap]]
         elif value is None:
             payload[field] = []
+    numbers = payload.get("numbers")
+    if isinstance(numbers, list):
+        clean = []
+        for item in numbers[:10]:
+            if isinstance(item, dict) and item.get("label") is not None and item.get("value") is not None:
+                clean.append({
+                    "label": str(item.get("label"))[:20],
+                    "value": item.get("value"),
+                    "basis": str(item.get("basis") or "assumption")[:20],
+                    "note": str(item.get("note") or "")[:60],
+                })
+        payload["numbers"] = clean
+    else:
+        payload["numbers"] = []
     for field, limit in (("judgment", 500), ("action", 300)):
         if isinstance(payload.get(field), str):
             payload[field] = payload[field][:limit]

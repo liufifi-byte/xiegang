@@ -175,6 +175,7 @@ class DebateRunner:
         repo: DecisionRunRepository,
         max_rounds: int = 2,
         timeout_seconds: float = 180.0,
+        ledger_snapshot: str = "",
     ):
         self.run_id = run_id
         self.dispute = dispute
@@ -183,6 +184,7 @@ class DebateRunner:
         self.repo = repo
         self.max_rounds = max(1, max_rounds)
         self.timeout_seconds = timeout_seconds
+        self.ledger_snapshot = ledger_snapshot
         self.outcome: DebateOutcome | None = None
 
     def _event(self, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -207,16 +209,25 @@ class DebateRunner:
             "missing_variable": self.dispute.missing_variable,
             "round": self.dispute.round + 1,
         }
-        return (
-            "【定向质询】针对以下实质分歧，只回应与你专业相关的部分。\n"
-            + json.dumps(packet, ensure_ascii=False, indent=2)
-            + "\n\n只输出一个 JSON 对象（DebateTurnResponse）："
+        parts = [
+            "【定向质询】针对以下实质分歧，只回应与你专业相关的部分。",
+            json.dumps(packet, ensure_ascii=False, indent=2),
+        ]
+        if self.ledger_snapshot:
+            parts.append(self.ledger_snapshot)
+        parts.append(
+            "只输出一个 JSON 对象（DebateTurnResponse）："
             '{"dispute_id":"…","agent_id":"…","position_before":"support|oppose|'
             'cautious|neutral|defer|conditional_support","position_after":"…",'
             '"changed":true|false,"reason":"…","new_evidence_refs":[],'
-            '"remaining_disagreement":"…","needs_user_input":false}\n'
-            "立场变化必须 changed=true 并给 reason；允许保留分歧，不强制一致。"
+            '"remaining_disagreement":"…","needs_user_input":false}'
+            "\n立场变化必须 changed=true 并给 reason；允许保留分歧，不强制一致。\n"
+            "【回应硬规则】回应必须包含以下三者之一，否则判定为"
+            "『维持原立场、无新增信息』并结束本争议：①新数字（先与账本对账）；"
+            "②新条件（此前未提过的成立/反转条件）；③新证据引用。"
+            "禁止『某某的论证不能改变我的判断』这类不交锋的模板句。"
         )
+        return "\n".join(parts        )
 
     async def run(self) -> AsyncIterator[dict[str, Any]]:
         dispute = self.dispute

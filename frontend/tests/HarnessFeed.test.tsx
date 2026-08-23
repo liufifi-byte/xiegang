@@ -81,6 +81,17 @@ describe("describeHarnessEvent", () => {
     expect(partial?.title).toContain("阶段性");
   });
 
+  it("终局卡优先展示主席结论四段", () => {
+    const card = describeHarnessEvent(ev("decision_finalized", {
+      strength: "conditional",
+      chair_summary: "当前建议：暂缓签约，先完成现金流核算。\n已确认：月供=2.1万\n推进条件：税后收入确认\n下一步补充：公积金额度",
+    }));
+    expect(card?.attention).toBe(true);
+    expect(card?.detail).toContain("当前建议：暂缓签约");
+    expect(card?.detail).toContain("下一步补充：公积金额度");
+    expect(card?.tags).toContain("结论带适用条件，请注意查看");
+  });
+
   it("降级与恢复语义可理解", () => {
     expect(describeHarnessEvent(ev("run_log", { note: "research_degraded" }))
       ?.title).toContain("网络检索暂时不可用");

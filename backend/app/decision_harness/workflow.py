@@ -692,6 +692,22 @@ class DecisionWorkflow:
             yield event
         results = [o.result for o in scheduler.outcomes]
 
+        # 统一数字账本（评审机制一）：专家报数汇账，冲突升级为对账争议
+        from app.decision_harness.number_ledger import collect_from_results
+
+        ledger = collect_from_results(results, round_no=1)
+        row_l = await repo.get_run(run_id)
+        state_l = dict(row_l.get("decision_state") or {}) if row_l else {}
+        state_l["number_ledger"] = ledger.to_dict()
+        await repo.update_run(run_id, decision_state=state_l)
+        self.number_ledger = ledger
+        for conflict in ledger.unresolved_conflicts()[:3]:
+            yield make_product_event(run_id, "run_log", {
+                "note": "number_conflict",
+                "label": conflict.label,
+                "values": [e.to_dict() for e in conflict.values[:3]],
+            })
+
         # Root 观察：只喂结构化摘要，绝不吸收 Child 原始历史（spec §13.3）
         observation = root_observation(results)
         root_session = f"{run_id}:main"
@@ -822,6 +838,63 @@ class DecisionWorkflow:
         await self.repo.update_run(run_id, workflow_phase=WorkflowPhase.DISPUTE_EXTRACTION.value)
         yield make_product_event(run_id, "run_log", {"phase": WorkflowPhase.DISPUTE_EXTRACTION.value})
 
+        # 统一追问关口（评审问题 6）：辩论前聚合全部"结论反转变量"问一次，
+        # 而不是散落在各专家末尾。生产模式 → WAITING_USER；影子模式 → 记录并继续。
+        consolidated_questions: list[str] = []
+        seen_q: set[str] = set()
+        row_q = await self.repo.get_run(run_id)
+        for q in ((row_q.get("decision_state") or {}).get("questions_for_user") or []):
+            if q not in seen_q:
+                seen_q.add(q)
+                consolidated_questions.append(str(q)[:120])
+        for r in results:
+            for q in r.questions_for_user:
+                if q not in seen_q:
+                    seen_q.add(q)
+                    consolidated_questions.append(str(q)[:120])
+        consolidated_questions = consolidated_questions[:8]
+        if consolidated_questions:
+            state_q = dict((row_q.get("decision_state") or {})) if row_q else {}
+            state_q["questions_for_user"] = consolidated_questions
+            await self.repo.update_run(run_id, decision_state=state_q)
+            yield make_product_event(run_id, "user_input_requested",
+                                     {"questions": consolidated_questions})
+            if not getattr(self, "auto_continue_without_user", False):
+                await self.repo.update_run(run_id, status="waiting_user")
+                self.pending_user_questions = consolidated_questions
+                return
+
+        # 数字冲突争议（评审机制一）：同标签不同值 → 强制一轮对账
+        ledger_obj = getattr(self, "number_ledger", None)
+        if ledger_obj is None and row_q:
+            from app.decision_harness.number_ledger import NumberLedger
+            ledger_obj = NumberLedger.from_dict(
+                (row_q.get("decision_state") or {}).get("number_ledger"))
+            self.number_ledger = ledger_obj
+        number_disputes: list[DisputeIssue] = []
+        if ledger_obj is not None:
+            for i, conflict in enumerate(ledger_obj.unresolved_conflicts()[:2], start=1):
+                participants = [e.source_agent for e in conflict.values[:2]
+                                if e.source_agent in EXPERT_IDS]
+                if len(participants) < 2:
+                    participants = list(dict.fromkeys(
+                        [e.source_agent for e in conflict.values] + ["mathematician", "economist"]
+                    ))[:2]
+                number_disputes.append(DisputeIssue(
+                    dispute_id=f"dispute-number-{i}",
+                    question=(f"数字对账：{conflict.label} 出现多个值（"
+                              + " vs ".join(e.raw_value for e in conflict.values[:3])
+                              + "）。哪一个是正确口径？请对账后给出统一值与依据。"),
+                    importance=0.7,
+                    conflict_type=ConflictType.FACT_CONFLICT,
+                    claims=[e.to_dict() for e in conflict.values[:3]],
+                    participants=participants,
+                    status="open", round=0,
+                ))
+            for d in number_disputes:
+                yield make_product_event(run_id, "run_log", {
+                    "note": "number_reconciliation_opened", "label": d.dispute_id})
+
         disputes = structural_disputes(results)
         if not disputes:
             # 立场多样性兜底（彩排复盘：全员 cautious、辩论永不点火）：
@@ -873,17 +946,37 @@ class DecisionWorkflow:
         await self.repo.update_run(run_id, workflow_phase=WorkflowPhase.DEBATE_LOOP.value)
         yield make_product_event(run_id, "run_log", {"phase": WorkflowPhase.DEBATE_LOOP.value})
 
+        disputes = number_disputes + disputes
+
         budget_rounds = max_rounds or self.budget.max_debate_rounds_per_dispute
+        ledger_snapshot = (self.number_ledger.snapshot_for_prompt()
+                           if getattr(self, "number_ledger", None) else "")
         outcomes = []
         for dispute in disputes:
+            # steelman 压力测试与数字对账：最多 1 轮（评审机制二）
+            rounds_for_dispute = (
+                1 if dispute.dispute_id in ("dispute-steelman",)
+                or dispute.dispute_id.startswith("dispute-number-")
+                else budget_rounds
+            )
             runner = DebateRunner(
                 run_id=run_id, dispute=dispute, agent_rows=agent_rows,
-                runtime=self.runtime, repo=self.repo, max_rounds=budget_rounds,
+                runtime=self.runtime, repo=self.repo,
+                max_rounds=rounds_for_dispute,
+                ledger_snapshot=ledger_snapshot,
             )
             async for event in runner.run():
                 yield event
             if runner.outcome is not None:
                 outcomes.append(runner.outcome)
+                if (dispute.dispute_id.startswith("dispute-number-")
+                        and dispute.status == "resolved"
+                        and getattr(self, "number_ledger", None)):
+                    self.number_ledger.mark_resolved(dispute.question[:20])
+                    row_m = await self.repo.get_run(run_id)
+                    state_m = dict(row_m.get("decision_state") or {}) if row_m else {}
+                    state_m["number_ledger"] = self.number_ledger.to_dict()
+                    await self.repo.update_run(run_id, decision_state=state_m)
 
         row = await self.repo.get_run(run_id)
         state = dict(row.get("decision_state") or {}) if row else {}
@@ -990,6 +1083,17 @@ class DecisionWorkflow:
                 await self.repo.update_run(run_id, decision_state=state_q)
 
         # ---- Synthesis ----
+        ledger_obj = getattr(self, "number_ledger", None)
+        if ledger_obj is None and row:
+            from app.decision_harness.number_ledger import NumberLedger
+            ledger_obj = NumberLedger.from_dict(
+                (row.get("decision_state") or {}).get("number_ledger"))
+            self.number_ledger = ledger_obj
+        ledger_snapshot_dict = ledger_obj.to_dict() if ledger_obj else None
+        ledger_conflict_labels = (
+            [c.label for c in ledger_obj.unresolved_conflicts()]
+            if ledger_obj else []
+        )
         await self.repo.update_run(run_id, workflow_phase=WorkflowPhase.SYNTHESIS_LOOP.value)
         yield make_product_event(run_id, "run_log", {"phase": WorkflowPhase.SYNTHESIS_LOOP.value})
         needs_user = any(d.get("status") == "narrowed" for d in disputes_state) or bool(
@@ -1006,6 +1110,8 @@ class DecisionWorkflow:
             unknowns=unverified_unknowns + list(self.decision.unknowns),
             gate_failures=[],
             partial=budget_exhausted,
+            ledger_dict=ledger_snapshot_dict,
+            ledger_conflicts=ledger_conflict_labels,
         )
         yield make_product_event(run_id, "finalization_proposed", {
             "recommendation_strength": report.recommendation.strength,
@@ -1042,6 +1148,8 @@ class DecisionWorkflow:
                 unknowns=unverified_unknowns + list(self.decision.unknowns),
                 gate_failures=["budget_exhausted"],
                 partial=True,
+                ledger_dict=ledger_snapshot_dict,
+                ledger_conflicts=ledger_conflict_labels,
             )
 
         status_map = {
@@ -1073,6 +1181,7 @@ class DecisionWorkflow:
                 "recommendation": report.recommendation.option[:200],
                 "strength": report.recommendation.strength,
                 "uncertainties": len(report.remaining_uncertainties),
+                "chair_summary": report.chair_summary[:600],
             })
         elif gate_status == RunExitStatus.WAITING_USER:
             yield make_product_event(run_id, "user_input_requested", {

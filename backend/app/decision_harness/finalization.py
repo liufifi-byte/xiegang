@@ -198,6 +198,8 @@ def build_final_report(
     unknowns: list[str],
     gate_failures: list[str],
     partial: bool,
+    ledger_dict: dict[str, Any] | None = None,
+    ledger_conflicts: list[str] | None = None,
 ) -> FinalReport:
     """从结构化状态合成最终报告（§18）。文案层可重组，结构化事实不得改写。"""
     speaking = [r for r in results
@@ -239,7 +241,31 @@ def build_final_report(
         # §18 契约：insufficient 必须列 remaining_uncertainties
         remaining = ["专家阶段未产出可用结论，关键信息缺口未补齐"]
 
+    # 主席统一结论卡（评审机制四）：建议一句话 + 已确认/未确认 +
+    # 推进条件 + 补数清单（300-500 字四段结构）
+    confirmed = [
+        f"{e['label']}={e['value']}" for e in
+        ([n for n in (ledger_dict or {}).get("entries", [])
+          if n.get("basis") == "user_input"][:4])
+    ]
+    pending_qs = [u for u in remaining if u and "？" in u or u and "?" in u][:4]
+    chair_lines = [
+        f"当前建议：{option[:60]}{'' if '不等于' in option else '（这不等同于否定该选项）'}。",
+        "已确认：" + ("；".join(confirmed) if confirmed
+                    else "暂无经用户确认的数字，所有计算基于专家假设。"),
+        "未确认（结论反转变量）：" + ("；".join(
+            [u[:40] for u in (unknowns or [])[:3]] or ["暂无"]) + "。"),
+        "推进条件（同时满足）：" + ("；".join(
+            [f"{d.get('missing_variable') or d.get('question', '')[:30]}"
+             for d in narrowed if d.get("missing_variable")][:3])
+            or "补齐关键数字且月供压力测试通过后可重新评估。") + "。",
+        "下一步补充：" + ("；".join(pending_qs) if pending_qs
+                      else "实际税后月收入、贷款利率与额度、持有年限预期。"),
+    ]
+    chair_summary = "\n".join(chair_lines)[:1200]
+
     return FinalReport(
+        chair_summary=chair_summary,
         recommendation=Recommendation(
             option=option,
             strength=strength,
@@ -274,6 +300,7 @@ def build_final_report(
         ))[:10],
         completion=CompletionState(
             status=RunExitStatus.PARTIAL_FINALIZED if partial else RunExitStatus.FINALIZED,
-            limitations=(gate_failures + (["预算受限"] if partial else []))[:8],
+            limitations=(gate_failures + (["预算受限"] if partial else [])
+                         + [f"数字冲突未对账：{c}" for c in (ledger_conflicts or [])[:2]])[:8],
         ),
     )

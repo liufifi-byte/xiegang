@@ -157,6 +157,7 @@ def render_child_prompt(packet: ExpertTaskPacket, context: ContextPacket) -> str
         "【输出契约】完成分析后，只输出一个 SubAgentResult JSON 对象"
         "（不要输出其他文本、不要 markdown 围栏），字段：\n"
         '{"status":"completed|partial|silent","relevance":0.0-1.0,'
+        '"numbers":[{"label":"月供","value":"2.1万","basis":"calculation","note":"口径说明"}],'
         '"stance":"support|oppose|cautious|neutral","judgment":"一句话判断",'
         '"analysis_points":["最多3条"],"unknowns":["关键不确定项"],'
         '"action":"建议行动","reversal_conditions":["推翻条件"],'
