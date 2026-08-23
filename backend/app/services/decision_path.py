@@ -66,8 +66,9 @@ EXTRACTION_PROMPT_TEMPLATE = """你是「决策路径」信息提取 Agent。
 3. 列出 3-5 个分析维度
 4. 列出最终给用户的具体交付
 5. 从用户原文里识别可量化、可定位、可枚举的明确事实(城市/金额/期限/百分比/截止时间等)
-6. 从下面候选问题 id 里挑出最相关的、最多 3 个,只挑「原问题与背景里没给的」
+6. 从下面候选问题 id 里挑出最相关的、最多 3 个(能不问就不问,0 个最好),只挑「原问题与背景里没给的」
    - 严格按用户专属信息原则(只有用户知道、很可能翻转结论),不挑公开事实问题
+   - 只挑选择题类候选(single_choice/multi_choice/range_choice)——用户全程点选,不打字
 
 候选问题 id:
 {candidate_ids}
@@ -106,7 +107,7 @@ async def _safe_llm_call(
         # 真正实施 LLM 总超时(PRD §16.1: 8-12s).超时立刻走 Playbook fallback.
         import asyncio as _asyncio
 
-        llm = get_structured_llm(LLMDecisionOutput, temperature=0.3)
+        llm = get_structured_llm(LLMDecisionOutput, temperature=0.3, fast=True)
         sem = get_llm_semaphore()
         async with sem:
             start = time.monotonic()
