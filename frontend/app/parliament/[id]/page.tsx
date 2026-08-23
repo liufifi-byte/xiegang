@@ -672,12 +672,21 @@ export default function ParliamentPage() {
     return "understanding";
   }, [agentTraces.length, currentRound, memberStatus, serverPhase, summary]);
 
+  // 调研阶段是否全员完成（phaseTitle 与专家席共用）
+  const researchAllDone =
+    phase === "research" &&
+    selectedExpertIds.length > 0 &&
+    selectedExpertIds.every(
+      (id) => memberStatus[id] === "done" || memberStatus[id] === "degraded" || memberStatus[id] === "error",
+    );
   const phaseTitle = {
     understanding:
       serverPhase === "awaiting_input"
         ? "等待你补充关键信息"
         : "正在理解你的问题",
-    research: "专家正在独立判断并核实事实",
+    research: researchAllDone
+      ? "已调研完成，即将开始辩论"
+      : "专家调研阶段：分头核实事实中",
     debate: currentRound > 0
       ? `专家正在进行第 ${Math.min(currentRound + 1, 3)} 轮讨论`
       : "专家正在形成核心争议",
@@ -807,6 +816,8 @@ export default function ParliamentPage() {
         <CouncilPhaseBar phase={phase} />
         {harnessItems.length > 0 && <HarnessFeed items={harnessItems} />}
         <ExpertSeatPanel
+          researchPhase={phase === "research"}
+          researchAllDone={researchAllDone}
           compact
           expertIds={selectedExpertIds}
           statuses={memberStatus}
@@ -926,6 +937,8 @@ export default function ParliamentPage() {
       </section>
 
       <ExpertSeatPanel
+        researchPhase={phase === "research"}
+        researchAllDone={researchAllDone}
         expertIds={selectedExpertIds}
         statuses={memberStatus}
         activeMember={activeMember}
@@ -1019,11 +1032,11 @@ function MemberDetailDrawer({
                 {
                   {
                     idle: "待命中",
-                    thinking: "正在形成独立判断...",
+                    thinking: "调研阶段…",
                     using_tool: "正在核实关键事实...",
                     organizing: "正在整理分析依据...",
                     speaking: "正在发言...",
-                    done: "已完成本轮",
+                    done: "已完成调研",
                     silent: "本轮未发言",
                     degraded: "基于有限信息完成",
                     error: "出错",

@@ -57,13 +57,13 @@ export function AgentResearchTimeline({
         className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
       >
         <div>
-          <div className="text-sm font-medium text-ink">自主调研实况</div>
+          <div className="text-sm font-medium text-ink">调研实况</div>
           <div className="mt-0.5 text-[11px] text-ink-3">
             {activeMember
               ? `正在查看${getMember(activeMember)?.display_name || "专家"}的研究路径`
               : allDone
-              ? `${terminalIds.size} 位专家已完成 · 可展开查看证据路径`
-              : `${terminalIds.size}/${expertIds.length} 位专家完成 · 行动由 Agent 自主决定`}
+              ? "已调研完成，即将开始辩论 · 可展开查看证据路径"
+              : `${terminalIds.size}/${expertIds.length} 位专家正在调研`}
           </div>
         </div>
         <span className="text-xs text-ink-3">{collapsed ? "展开" : "收起"}</span>
@@ -82,7 +82,7 @@ export function AgentResearchTimeline({
             <div className="py-5 text-center text-xs text-ink-3">
               {terminalIds.size
                 ? "已完成专家的观点正在下方依次展示"
-                : "议会正在确定每位专家的研究任务…"}
+                : "议会正在确定每位专家的调研任务…"}
             </div>
           )}
         </div>

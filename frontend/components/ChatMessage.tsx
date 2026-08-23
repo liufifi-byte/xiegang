@@ -56,7 +56,7 @@ export function ChatMessage({ entry }: Props) {
 
       {/* 气泡主体 */}
       <div className="flex-1 min-w-0">
-        {/* 名字 + 时间（"独立判断"/轮次只在这里出现一次，spec §14.2） */}
+        {/* 名字 + 时间（"调研阶段"/轮次只在这里出现一次，spec §14.2） */}
         <div className="flex items-baseline gap-2 mb-1">
           <span className="text-sm font-medium" style={{ color }}>
             {member.display_name}
@@ -154,5 +154,5 @@ function renderParagraphs(content: string, color: string) {
 }
 
 function formatTime(round?: number): string {
-  return round === 0 ? "独立判断" : `第 ${round} 轮`;
+  return round === 0 ? "调研阶段" : `第 ${round} 轮`;
 }

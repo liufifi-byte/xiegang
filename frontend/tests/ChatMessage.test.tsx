@@ -55,9 +55,9 @@ describe("ChatMessage · V3 四段契约渲染", () => {
     expect(screen.getByText("【关键问题】")).toBeInTheDocument();
   });
 
-  it("「独立判断」只出现一次；不渲染 duty chip 和判断基础标签", () => {
+  it("「调研阶段」只出现一次；不渲染 duty chip 和判断基础标签", () => {
     render(<ChatMessage entry={v3Entry} />);
-    expect(screen.getAllByText("独立判断")).toHaveLength(1);
+    expect(screen.getAllByText("调研阶段")).toHaveLength(1);
     expect(screen.queryByText("交叉质证")).toBeNull();
     expect(screen.queryByText(/判断基础/)).toBeNull();
   });

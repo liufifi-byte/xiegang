@@ -20,13 +20,22 @@ export function ExpertSeatPanel({
   activeMember,
   onSelect,
   compact = false,
+  researchPhase = false,
+  researchAllDone = false,
 }: {
   expertIds: MemberId[];
   statuses: Partial<Record<MemberId, MemberStatus>>;
   activeMember: MemberId | null;
   onSelect: (id: MemberId) => void;
   compact?: boolean;
+  /** 调研阶段：席位文案统一为「调研阶段」，避免微观状态术语困扰用户 */
+  researchPhase?: boolean;
+  /** 调研全员完成：「已调研完成」（完整句"即将开始辩论"由阶段横幅承担） */
+  researchAllDone?: boolean;
 }) {
+  const seatLabel = (status: MemberStatus) =>
+    researchAllDone ? "已调研完成" : researchPhase ? "调研阶段" : STATUS_LABEL[status];
+
   if (compact) {
     return (
       <div className="flex gap-2 overflow-x-auto border-b border-[#e8e3e5] bg-white px-3 py-2 lg:hidden">
@@ -55,7 +64,7 @@ export function ExpertSeatPanel({
                 {expert.display_name}
               </span>
               <span className="text-[10px] text-[#978994]">
-                {STATUS_LABEL[status]}
+                {seatLabel(status)}
               </span>
             </button>
           );
@@ -113,7 +122,7 @@ export function ExpertSeatPanel({
                     active ? "font-bold text-[#b34b58]" : "text-[#968c95]"
                   }`}
                 >
-                  {STATUS_LABEL[status]}
+                  {seatLabel(status)}
                 </small>
               </span>
             </button>
